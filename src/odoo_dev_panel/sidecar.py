@@ -1,0 +1,1947 @@
+"""GUI-facing server. The Tauri app spawns ``odp sidecar`` and talks JSON-RPC on its stdin/stdout.
+
+The sidecar is only a client of the agents. It may die with the app at any time;
+no Odoo process depends on it.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import logging
+import os
+import pwd
+import sys
+import tempfile
+
+from . import __version__, client, paths, privilege, rpc
+
+_logger = logging.getLogger(__name__)
+
+FORWARDED_EVENTS = ("session.output", "session.ended", "session.state")
+
+
+class Sidecar:
+    def __init__(self) -> None:
+        self.ui: rpc.Connection | None = None
+        self.agents: dict[str, rpc.Connection] = {}
+        self._agent_lock = asyncio.Lock()
+        self._askpass_server: asyncio.AbstractServer | None = None
+        self.askpass_path = os.path.join(
+            os.environ.get("XDG_RUNTIME_DIR") or tempfile.gettempdir(), f"odp-askpass-{os.getpid()}.sock"
+        )
+        self._unlocking: str | None = None
+        self._purpose = "unlock"
+        self._jobs: dict[str, asyncio.Task] = {}  # one provision and one repair at a time
+        self._owners: tuple[float, set[str]] | None = None
+        self._git_run: tuple[str, list[bool]] | None = None  # running repo job and its cancel flag
+        self._task_run: tuple[str, object] | None = None  # running workflow and its env (cancel flag)
+        self._task_gates: dict[tuple[str, int], asyncio.Future] = {}  # (run_id, step) -> waiting confirmation
+
+    # -- agent connections ------------------------------------------------
+
+    async def agent(self, user: str) -> rpc.Connection:
+        async with self._agent_lock:
+            conn = self.agents.get(user)
+            if conn and not conn.closed.is_set():
+                return conn
+            handlers = {event: self._forwarder(user, event) for event in FORWARDED_EVENTS}
+            handlers["agent.refused"] = self._forwarder(user, "agent.refused")
+            conn = await client.connect(user, handlers)
+            conn.on_close(lambda: self._on_agent_closed(user, conn))
+            await conn.request("session.watch", {"enabled": True})
+            self.agents[user] = conn
+            return conn
+
+    def _forwarder(self, user: str, event: str):
+        async def forward(params, _conn):
+            if self.ui:
+                await self.ui.notify(event, {"user": user, **(params or {})})
+
+        return forward
+
+    def _on_agent_closed(self, user: str, conn: rpc.Connection) -> None:
+        if self.agents.get(user) is conn:
+            del self.agents[user]
+        if self.ui and not self.ui.closed.is_set():
+            self.ui.spawn(self.ui.notify("agent.disconnected", {"user": user}))
+
+    # -- askpass ----------------------------------------------------------
+
+    async def _start_askpass_server(self) -> None:
+        try:
+            os.unlink(self.askpass_path)
+        except FileNotFoundError:
+            pass
+        old_umask = os.umask(0o177)
+        try:
+            self._askpass_server = await asyncio.start_unix_server(self._on_askpass, path=self.askpass_path)
+        finally:
+            os.umask(old_umask)
+
+    async def _on_askpass(self, reader, writer) -> None:
+        conn = rpc.Connection(reader, writer, {"askpass": self._h_askpass}, name="askpass")
+        await conn.serve()
+
+    async def _h_askpass(self, params, _conn):
+        if not self.ui:
+            return {"password": None}
+        answer = await self.ui.request(
+            "ui.askPassword",
+            {"prompt": (params or {}).get("prompt", ""), "user": self._unlocking, "purpose": self._purpose}, timeout=300
+        )
+        return {"password": (answer or {}).get("password")}
+
+    # -- UI handlers ------------------------------------------------------
+
+    def handlers(self):
+        return {
+            "app.info": self.h_app_info,
+            "agents.list": self.h_agents_list,
+            "agent.start": self.h_agent_start,
+            "agent.stop": self.h_agent_stop,
+            "agent.enable": self.h_agent_enable,
+            "sessions.list": self.h_sessions_list,
+            "session.start": self.h_session_start,
+            "run.start": self.h_run_start,
+            "run.open": self.h_run_open,
+            "session.stop": self.h_session_stop,
+            "process.stop": self.h_process_stop,
+            "session.follow": self.h_session_follow,
+            "session.unfollow": self.h_session_unfollow,
+            "session.write": self.h_session_write,
+            "session.resize": self.h_session_resize,
+            "session.problems": self.h_session_problems,
+            "provision.plan": self.h_provision_plan,
+            "provision.run": self.h_provision_run,
+            "doctor.run": self.h_doctor,
+            "repair.plan": self.h_repair_plan,
+            "repair.run": self.h_repair_run,
+            "perms.plan": self.h_perms_plan,
+            "perms.run": self.h_perms_run,
+            "config.open": self.h_config_open,
+            "config.validate": self.h_config_validate,
+            "config.form": self.h_config_form,
+            "config.save": self.h_config_save,
+            "modules.graph": self.h_modules_graph,
+            "modules.center": self.h_modules_center,
+            "python.env": self.h_python_env,
+            "python.reqfile": self.h_python_reqfile,
+            "python.disk": self.h_python_disk,
+            "python.export": self.h_python_export,
+            "python.tools": self.h_python_tools,
+            "python.plan": self.h_python_plan,
+            "python.run": self.h_python_run,
+            "modules.plan": self.h_modules_plan,
+            "modules.run": self.h_modules_run,
+            "modules.tests": self.h_modules_tests,
+            "modules.drop_test": self.h_modules_drop_test,
+            "modules.scaffold_plan": self.h_modules_scaffold_plan,
+            "modules.scaffold": self.h_modules_scaffold,
+            "modules.open": self.h_modules_open,
+            "compare.run": self.h_compare,
+            "compare.databases": self.h_compare_databases,
+            "compare.installations": self.h_compare_installations,
+            "docker.list": self.h_docker_list,
+            "docker.plan": self.h_docker_plan,
+            "docker.run": self.h_docker_run,
+            "docker.logs": self.h_docker_logs,
+            "docker.new_plan": self.h_docker_new_plan,
+            "docker.new_run": self.h_docker_new_run,
+            "docker.delete_plan": self.h_docker_delete_plan,
+            "docker.delete_run": self.h_docker_delete_run,
+            "docker.shell": self.h_docker_shell,
+            "config.copy": self.h_config_copy,
+            "db.list": self.h_db_list,
+            "db.plan": self.h_db_plan,
+            "db.run": self.h_db_run,
+            "db.snapshots": self.h_db_snapshots,
+            "discover.scan": self.h_discover,
+            "services.list": self.h_services_list,
+            "services.action": self.h_services_action,
+            "services.journal": self.h_services_journal,
+            "services.show": self.h_services_show,
+            "discover.adopt": self.h_adopt,
+            "repo.list": self.h_repo_list,
+            "repo.show": self.h_repo_show,
+            "repo.diff": self.h_repo_diff,
+            "repo.plan": self.h_repo_plan,
+            "repo.run": self.h_repo_run,
+            "repo.cancel": self.h_repo_cancel,
+            "repo.register": self.h_repo_register,
+            "repo.forget": self.h_repo_forget,
+            "repo.open": self.h_repo_open,
+            "repo.addons_plan": self.h_repo_addons_plan,
+            "repo.addons_apply": self.h_repo_addons_apply,
+            "desktop.pickFile": self.h_pick_file,
+            "profile.list": self.h_profile_list,
+            "profile.read": self.h_profile_read,
+            "profile.resolve": self.h_profile_resolve,
+            "profile.save": self.h_profile_save,
+            "profile.delete": self.h_profile_delete,
+            "profile.import": self.h_profile_import,
+            "profile.export": self.h_profile_export,
+            "profile.org": self.h_profile_org,
+            "instance.logs": self.h_instance_logs,
+            "db.models": self.h_db_models,
+            "db.model": self.h_db_model,
+            "db.xmlids": self.h_db_xmlids,
+            "db.sizes": self.h_db_sizes,
+            "db.count": self.h_db_count,
+            "perf.overview": self.h_perf_overview,
+            "perf.cancel": self.h_perf_cancel,
+            "perf.grant_plan": self.h_perf_grant_plan,
+            "perf.grant_run": self.h_perf_grant_run,
+            "debug.presets": self.h_debug_presets,
+            "debug.next_port": self.h_debug_next_port,
+            "debug.save": self.h_debug_save,
+            "debug.delete": self.h_debug_delete,
+            "debug.plan": self.h_debug_plan,
+            "debug.start": self.h_debug_start,
+            "debug.vscode_plan": self.h_debug_vscode_plan,
+            "debug.vscode_write": self.h_debug_vscode_write,
+            "debug.open": self.h_debug_open,
+            "tasks.list": self.h_tasks_list,
+            "tasks.ops": self.h_tasks_ops,
+            "tasks.read": self.h_tasks_read,
+            "tasks.check": self.h_tasks_check,
+            "tasks.save": self.h_tasks_save,
+            "tasks.delete": self.h_tasks_delete,
+            "tasks.preview": self.h_tasks_preview,
+            "tasks.run": self.h_tasks_run,
+            "tasks.confirm": self.h_tasks_confirm,
+            "tasks.cancel": self.h_tasks_cancel,
+            "tasks.history": self.h_tasks_history,
+            "group.join": self.h_group_join,
+            "debug.print": self.h_debug_print,
+        }
+
+    async def h_app_info(self, params, _conn):
+        return {
+            "version": __version__,
+            "user": pwd.getpwuid(os.getuid()).pw_name,
+            "socket_dir": str(paths.socket_dir()),
+            "pid": os.getpid(),
+            "group": privilege.group_state(),
+        }
+
+    async def h_group_join(self, params, _conn):
+        """Add the developer to odoo-dev (one sudo prompt). The app then restarts its sidecar, which takes the
+        group through sg, so no logout is needed."""
+        state = privilege.group_state()
+        if state["member"]:
+            return state
+        if not state["exists"]:
+            raise rpc.RpcError(rpc.CONFLICT, f"group {state['group']} does not exist: reinstall the package")
+        self._unlocking, self._purpose = pwd.getpwuid(os.getuid()).pw_name, "join"
+        try:
+            code, output = await privilege.join_group_askpass({"ODP_ASKPASS_SOCK": self.askpass_path})
+        finally:
+            self._unlocking, self._purpose = None, "unlock"
+        if code != 0:
+            raise rpc.RpcError(rpc.FORBIDDEN, f"could not add you to {state['group']}: {output or f'exit {code}'}")
+        return privilege.group_state()
+
+    async def _install_owners(self) -> set[str]:
+        """Run-as users of discovered installations, cached for a minute (agents.list is polled)."""
+        from .discover.installs import scan_installations
+
+        now = asyncio.get_running_loop().time()
+        if self._owners is None or now - self._owners[0] > 60:
+            installs = await asyncio.to_thread(scan_installations)
+            self._owners = (now, {i.owner for i in installs if i.owner and i.venv_ok is not None})
+        return self._owners[1]
+
+    async def h_agents_list(self, params, _conn):
+        owners = await self._install_owners()
+        members = client.group_members()
+        users = client.candidate_users(extra=owners)
+        statuses = await asyncio.gather(*(client.agent_status(u) for u in users))
+        return [{**s, "enabled": s["user"] in members} for s in statuses]
+
+    async def h_agent_enable(self, params, _conn):
+        """Add a discovered run-as user to the odoo-dev group (one sudo call, shown to the user first)."""
+        user = _user(params)
+        if user not in await self._install_owners():
+            raise rpc.RpcError(rpc.INVALID_PARAMS, f"{user} is not the run-as user of a discovered installation")
+        if user in client.group_members():
+            return {"user": user, "enabled": True}
+        self._unlocking, self._purpose = user, "enable"
+        try:
+            code, output = await privilege.enable_user_askpass(user, {"ODP_ASKPASS_SOCK": self.askpass_path})
+        finally:
+            self._unlocking, self._purpose = None, "unlock"
+        if code != 0:
+            raise rpc.RpcError(rpc.FORBIDDEN, f"could not add {user} to {paths.DEFAULT_GROUP}: {output or f'exit {code}'}")
+        return {"user": user, "enabled": True}
+
+    async def h_agent_start(self, params, _conn):
+        user = _user(params)
+        status = await client.agent_status(user)
+        if status["state"] == "running":
+            return status
+        if user not in client.group_members():
+            raise rpc.RpcError(rpc.CONFLICT, f"{user} is not in {paths.DEFAULT_GROUP}; enable it first")
+        self._unlocking = user
+        try:
+            code, output = await privilege.start_agent_askpass(user, {"ODP_ASKPASS_SOCK": self.askpass_path})
+        finally:
+            self._unlocking = None
+        if code != 0:
+            raise rpc.RpcError(rpc.FORBIDDEN, f"could not start agent for {user}: {output or f'exit {code}'}")
+        return await client.wait_running(user)
+
+    async def h_agent_stop(self, params, _conn):
+        user = _user(params)
+        conn = await self.agent(user)
+        return await conn.request("agent.shutdown")
+
+    async def h_sessions_list(self, params, _conn):
+        result = []
+        for user, path in client.agent_sockets().items():
+            try:
+                conn = await self.agent(user)
+                sessions = await conn.request("session.list", timeout=5)
+            except (rpc.RpcError, rpc.ConnectionClosed, asyncio.TimeoutError) as exc:
+                _logger.info("agent %s unavailable: %s", user, exc)
+                continue
+            result.extend(sessions)
+        result.sort(key=lambda s: s.get("started_at", ""), reverse=True)
+        return result
+
+    async def h_session_start(self, params, _conn):
+        params = dict(params or {})
+        conn = await self.agent(_user(params))
+        params.pop("user")
+        return await conn.request("session.start", params)
+
+    async def h_run_start(self, params, _conn):
+        """Start a discovered instance as its run-as user. ``params``: instance plus RunSpec fields."""
+        from . import run
+        from .discover import scan
+
+        params = dict(params or {})
+        ref = params.pop("instance", None)
+        if not isinstance(ref, str) or not ref:
+            raise rpc.RpcError(rpc.INVALID_PARAMS, "instance is required")
+        snap = await asyncio.to_thread(scan.scan, None, False)
+        busy = {p["port"] for p in snap["processes"] if p.get("port")}
+        debug_port = {params["debug_port"]} if isinstance(params.get("debug_port"), int) else set()
+        planned = run.plan(snap, ref, params, busy | set(await asyncio.to_thread(_listening)) | debug_port)
+        conn = await self.agent(planned.pop("user"))
+        return await conn.request("session.start", planned)
+
+    async def h_run_open(self, params, _conn):
+        """Open a running instance in the default browser. Only http://localhost:<port> is accepted."""
+        import subprocess
+
+        port = (params or {}).get("port")
+        if not isinstance(port, int) or not 1 <= port <= 65535:
+            raise rpc.RpcError(rpc.INVALID_PARAMS, "port is required")
+        subprocess.Popen(
+            ["xdg-open", f"http://localhost:{port}"],
+            stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True,
+        )
+        return True
+
+    async def h_session_stop(self, params, _conn):
+        conn = await self.agent(_user(params))
+        return await conn.request("session.stop", {"id": params.get("id"), "timeout": params.get("timeout", 15)}, timeout=30)
+
+    async def h_session_follow(self, params, _conn):
+        conn = await self.agent(_user(params))
+        return await conn.request("session.follow", {"id": params.get("id"), "offset": params.get("offset", 0)})
+
+    async def h_session_unfollow(self, params, _conn):
+        conn = await self.agent(_user(params))
+        return await conn.request("session.unfollow", {"id": params.get("id")})
+
+    async def h_session_write(self, params, _conn):
+        conn = await self.agent(_user(params))
+        return await conn.request("session.write", {"id": params.get("id"), "data": params.get("data")})
+
+    async def h_session_resize(self, params, _conn):
+        conn = await self.agent(_user(params))
+        return await conn.request("session.resize", {"id": params.get("id"), "rows": params.get("rows"), "cols": params.get("cols")})
+
+    async def h_process_stop(self, params, _conn):
+        """Stop an Odoo process that runs outside the app: its systemd unit (sudo) or SIGTERM through its owner."""
+        from . import procutil, services
+
+        p = params or {}
+        pid = p.get("pid")
+        if not isinstance(pid, int):
+            raise rpc.RpcError(rpc.INVALID_PARAMS, "pid is required")
+        timeout, force = float(p.get("timeout", 15)), bool(p.get("force"))
+        proc = next((x for x in (await self._snap_procs())["processes"] if x["pid"] == pid), None)
+        if proc is None:
+            raise rpc.RpcError(rpc.NOT_FOUND, f"pid {pid} is not a running Odoo process the app knows")
+        if proc.get("unit"):
+            # SIGTERM would only make Restart= start it again: ask systemd.
+            self._unlocking, self._purpose = pwd.getpwuid(os.getuid()).pw_name, "service"
+            try:
+                await services.run_action_askpass("stop", proc["unit"], {"ODP_ASKPASS_SOCK": self.askpass_path})
+            except services.ServiceError as exc:
+                raise rpc.RpcError(rpc.INVALID_PARAMS, str(exc)) from exc
+            finally:
+                self._unlocking, self._purpose = None, "unlock"
+            return {"stopped": True, "via": "systemd", "unit": proc["unit"]}
+        me, owner = pwd.getpwuid(os.getuid()).pw_name, proc.get("user")
+        if owner and owner != me:
+            try:
+                conn = await self.agent(owner)
+            except Exception as exc:  # the agent of that user is not running or not unlocked
+                raise rpc.RpcError(rpc.CONFLICT, f"Unlock the {owner} agent first (Sessions → Agents): {exc}") from exc
+            out = await conn.request("process.stop", {"pid": pid, "starttime": proc.get("starttime"),
+                                                      "timeout": timeout, "force": force}, timeout=timeout + 15)
+            return {**out, "via": f"agent of {owner}"}
+        try:
+            out = await procutil.stop_odoo_pid(pid, proc.get("starttime"), timeout, force)
+        except procutil.StopError as exc:
+            raise rpc.RpcError(rpc.INVALID_PARAMS, str(exc)) from exc
+        return {**out, "via": "signal"}
+
+    async def h_session_problems(self, params, _conn):
+        """Counts per level and grouped warnings/errors of a session log (its last 8 MB)."""
+        from . import logs
+
+        conn = await self.agent(_user(params))
+        text, start = await logs.read_tail(conn, params.get("id"))
+        minimum = params.get("level") or logs.PROBLEM
+        if minimum not in logs.LEVELS:
+            raise rpc.RpcError(rpc.INVALID_PARAMS, f"unknown level {minimum!r}")
+        result = {**logs.analyze(text, minimum), "start_offset": start, "sql": logs.sql_summary(text)}
+        from .pyenv import imports
+
+        for group in result["groups"]:
+            module = imports.module_in(group.get("sample"))
+            if module:
+                group["missing_module"] = {"module": module, "package": imports.package_for(module)}
+        return result
+
+    async def h_provision_plan(self, params, _conn):
+        """Dry run: preflight, steps, root script (verifier only) and config with placeholder passwords."""
+        from .provision import service
+
+        params = dict(params or {})
+        remote = params.pop("remote", True) is not False
+        try:
+            return await asyncio.to_thread(service.plan, params, remote)
+        except service.RequestError as exc:
+            raise rpc.RpcError(rpc.INVALID_PARAMS, str(exc)) from exc
+
+    async def h_provision_run(self, params, _conn):
+        """Start a provision in the background. Progress arrives as provision.step, the end as provision.finished."""
+        from .provision import execute, service
+
+        params = dict(params or {})
+        params.pop("remote", None)
+        try:
+            spec, _ = service.build(params)
+        except service.RequestError as exc:
+            raise rpc.RpcError(rpc.INVALID_PARAMS, str(exc)) from exc
+
+        async def root_runner(script: str, rep) -> int:
+            self._unlocking, self._purpose = spec.run_as, "provision"
+            try:
+                return await execute.sudo_runner(script, rep, {"ODP_ASKPASS_SOCK": self.askpass_path})
+            finally:
+                self._unlocking, self._purpose = None, "unlock"
+
+        async def work(report) -> dict:
+            await execute.provision(spec, report, root_runner=root_runner)
+            return {}
+
+        run_id = self._start_job("provision", work, {"root": spec.root, "run_as": spec.run_as, "conf_path": spec.conf_path})
+        return {"run_id": run_id, "run_as": spec.run_as, "root": spec.root}
+
+    def _start_job(self, kind: str, work, finished: dict) -> str:
+        """Run ``work(report)`` in the background. Progress goes out as ``<kind>.step``, the end as ``<kind>.finished``
+        with ``finished`` plus ok/error and what ``work`` returned."""
+        return self._start_job_with_id(kind, work, finished, os.urandom(4).hex())
+
+    def _start_job_with_id(self, kind: str, work, finished: dict, run_id: str) -> str:
+        task = self._jobs.get(kind)
+        if task and not task.done():
+            raise rpc.RpcError(rpc.CONFLICT, f"a {kind} is already running")
+        ui = self.ui
+        # One queue and one sender keep the events in order and put <kind>.finished after the last step.
+        queue: asyncio.Queue = asyncio.Queue()
+
+        def report(event: dict) -> None:
+            queue.put_nowait((f"{kind}.step", {"run_id": run_id, **event}))
+
+        async def sender() -> None:
+            while True:
+                item = await queue.get()
+                if item is None:
+                    return
+                if ui and not ui.closed.is_set():
+                    await ui.notify(*item)
+
+        async def job() -> None:
+            error, result = None, {}
+            send = asyncio.create_task(sender())
+            try:
+                result = await work(report) or {}
+            except Exception as exc:  # noqa: BLE001
+                error = str(exc)
+                _logger.info("%s %s failed: %s", kind, run_id, exc)
+            queue.put_nowait((f"{kind}.finished", {"run_id": run_id, "ok": error is None, "error": error, **finished, **result}))
+            queue.put_nowait(None)
+            await send
+
+        self._jobs[kind] = asyncio.create_task(job())
+        return run_id
+
+    # -- W1-W10: Git repositories -------------------------------------------
+
+    async def _snap(self) -> dict:
+        from .discover import scan
+
+        return await asyncio.to_thread(scan.scan, None, False)
+
+    @staticmethod
+    def _git_error(exc: Exception) -> rpc.RpcError:
+        from .git import api
+
+        if isinstance(exc, (api.NotFound, LookupError)):
+            return rpc.RpcError(rpc.NOT_FOUND, str(exc))
+        return rpc.RpcError(rpc.INVALID_PARAMS, str(exc))
+
+    async def h_repo_list(self, params, _conn):
+        """Repositories of the discovered installations with live Git state. ``state: false`` skips git status."""
+        from .git import registry, workspace
+
+        params = params or {}
+        inst = params.get("installation")
+        if inst is not None and not isinstance(inst, str):
+            raise rpc.RpcError(rpc.INVALID_PARAMS, "installation is a root path")
+        try:
+            return await asyncio.to_thread(workspace.listing, await self._snap(), None, inst, params.get("state", True) is not False)
+        except registry.RegistryError as exc:
+            raise rpc.RpcError(rpc.INTERNAL_ERROR, str(exc)) from exc
+
+    async def h_repo_show(self, params, _conn):
+        from .git import workspace
+
+        path = (params or {}).get("path")
+        if not isinstance(path, str):
+            raise rpc.RpcError(rpc.INVALID_PARAMS, "path is required")
+        try:
+            return await asyncio.to_thread(workspace.show, path, await self._snap())
+        except LookupError as exc:
+            raise self._git_error(exc) from exc
+
+    async def h_repo_diff(self, params, _conn):
+        from .git import workspace
+
+        path, file = (params or {}).get("path"), (params or {}).get("file")
+        if not isinstance(path, str) or file is not None and not isinstance(file, str):
+            raise rpc.RpcError(rpc.INVALID_PARAMS, "path is required; file is text")
+        try:
+            return await asyncio.to_thread(workspace.diff, path, await self._snap(), file)
+        except LookupError as exc:
+            raise self._git_error(exc) from exc
+
+    async def _repo_plan(self, params):
+        from .git import api
+
+        params = params or {}
+        try:
+            return await asyncio.to_thread(api.plan, params.get("op"), params, await self._snap())
+        except (api.ApiError, LookupError) as exc:
+            raise self._git_error(exc) from exc
+
+    async def h_repo_plan(self, params, _conn):
+        """Dry run of fetch, pull, switch, checkout or clone: per-repository checks and the exact commands."""
+        return (await self._repo_plan(params)).as_dict()
+
+    async def h_repo_run(self, params, _conn):
+        """Run a repository plan in the background, one repository at a time. Progress as git.step, the end as
+        git.finished with a result per repository (ok, failed, skipped, cancelled)."""
+        from .git import ops
+
+        plan = await self._repo_plan(params)
+        if not plan.ok:
+            failed = [c["detail"] for c in plan.checks if c["status"] == "fail"] or ["nothing can run"]
+            raise rpc.RpcError(rpc.CONFLICT, "; ".join(failed))
+        flag = [False]
+
+        async def work(report) -> dict:
+            return await ops.run_plan(plan, report, lambda: flag[0])
+
+        run_id = self._start_job("git", work, {"op": plan.op})
+        self._git_run = (run_id, flag)
+        return {"run_id": run_id, "op": plan.op, "repos": [i.repo for i in plan.items]}
+
+    async def h_repo_cancel(self, params, _conn):
+        """Stop after the repository that is running now. A running Git command is never killed."""
+        run_id = (params or {}).get("run_id")
+        if not self._git_run or self._git_run[0] != run_id:
+            raise rpc.RpcError(rpc.NOT_FOUND, "no such repository job")
+        self._git_run[1][0] = True
+        return {"cancelling": True}
+
+    async def h_repo_register(self, params, _conn):
+        """Add an existing repository (and its association to an installation). Writes repositories.json only."""
+        from .git import api
+
+        try:
+            return await asyncio.to_thread(api.register_existing, params or {}, await self._snap())
+        except (api.ApiError, LookupError) as exc:
+            raise self._git_error(exc) from exc
+
+    async def h_repo_forget(self, params, _conn):
+        from .git import api
+
+        try:
+            return {"forgotten": await asyncio.to_thread(api.forget, params or {})}
+        except api.ApiError as exc:
+            raise self._git_error(exc) from exc
+
+    async def h_repo_addons_plan(self, params, _conn):
+        """For each config of an installation, the addons_path entries some repositories would add (read-only)."""
+        from .git import api
+
+        try:
+            return await asyncio.to_thread(api.addons_proposal, params or {}, await self._snap())
+        except (api.ApiError, LookupError) as exc:
+            raise self._git_error(exc) from exc
+
+    async def h_repo_addons_apply(self, params, _conn):
+        """Append entries to one config's addons_path (backup, refused if the file changed since it was shown)."""
+        from .git import api
+
+        try:
+            return await asyncio.to_thread(api.addons_apply, params or {}, await self._snap())
+        except (api.ApiError, LookupError) as exc:
+            raise self._git_error(exc) from exc
+
+    async def h_repo_open(self, params, _conn):
+        from .git import opener, workspace
+
+        params = params or {}
+        path = params.get("path")
+        if not isinstance(path, str):
+            raise rpc.RpcError(rpc.INVALID_PARAMS, "path is required")
+        try:
+            row = await asyncio.to_thread(workspace.resolve, path, await self._snap())
+            return {"argv": opener.open_path(row["path"], params.get("target", "ide"))}
+        except LookupError as exc:
+            raise self._git_error(exc) from exc
+        except opener.OpenError as exc:
+            raise rpc.RpcError(rpc.UNAVAILABLE, str(exc)) from exc
+
+    # -- T2/T6: profiles ------------------------------------------------------
+
+    @staticmethod
+    def _profile_call(func, *args):
+        from .provision import profiles
+
+        try:
+            return func(*args)
+        except profiles.ProfileError as exc:
+            raise rpc.RpcError(rpc.INVALID_PARAMS, str(exc)) from exc
+
+    async def h_profile_list(self, params, _conn):
+        """Saved profiles plus where the org overlay is and whether it exists and parses."""
+        from .provision import profiles
+
+        org = profiles.org_path()
+        org_error = None
+        if org.is_file():
+            try:
+                profiles.read(org)
+            except profiles.ProfileError as exc:
+                org_error = str(exc)
+        return {"profiles": await asyncio.to_thread(profiles.list_profiles), "folder": str(profiles.profiles_dir()),
+                "org": {"path": str(org), "exists": org.is_file(), "error": org_error}}
+
+    async def h_profile_read(self, params, _conn):
+        """One saved profile as data and as TOML text."""
+        from .provision import profiles
+
+        name = (params or {}).get("name")
+        path = self._profile_call(profiles.profile_path, name)
+        data = self._profile_call(profiles.read, path)
+        return {"name": name, "path": str(path), "data": data, "text": path.read_text()}
+
+    async def h_profile_resolve(self, params, _conn):
+        """Layers merged for a version: values, where each came from, and the spec they give."""
+        from .provision import profiles
+
+        p = params or {}
+        version = p.get("version")
+        if version is not None and (not isinstance(version, int) or isinstance(version, bool)):
+            raise rpc.RpcError(rpc.INVALID_PARAMS, "version must be an integer")
+        return self._profile_call(profiles.resolve, p.get("profile") or None, version, p.get("overrides") or None)
+
+    async def h_profile_save(self, params, _conn):
+        from .provision import profiles
+
+        p = params or {}
+        if not isinstance(p.get("data"), dict):
+            raise rpc.RpcError(rpc.INVALID_PARAMS, "data is a profile object")
+        return {"path": self._profile_call(profiles.save, p.get("name"), p["data"], bool(p.get("overwrite")))}
+
+    async def h_profile_delete(self, params, _conn):
+        """Moves the file aside as .trash-<name>-<time>.toml; nothing is deleted."""
+        from .provision import profiles
+
+        return {"moved_to": self._profile_call(profiles.delete, (params or {}).get("name"))}
+
+    async def h_profile_import(self, params, _conn):
+        from .provision import profiles
+
+        p = params or {}
+        if not isinstance(p.get("path"), str) or not p["path"].startswith("/"):
+            raise rpc.RpcError(rpc.INVALID_PARAMS, "path must be an absolute file")
+        return {"path": self._profile_call(profiles.import_file, p["path"], p.get("name") or None, bool(p.get("overwrite")))}
+
+    async def h_profile_export(self, params, _conn):
+        """Sanitized profile of a discovered installation: TOML text and data; with ``name`` it is also saved."""
+        from .provision import export, profiles
+
+        p = params or {}
+        snap = await self._snap()
+        try:
+            data, notes = await asyncio.to_thread(export.export_installation, p.get("root"), snap)
+        except export.ExportError as exc:
+            raise rpc.RpcError(rpc.INVALID_PARAMS, str(exc)) from exc
+        out = {"data": data, "text": self._profile_call(profiles.dump, data), "notes": notes, "path": None}
+        if p.get("name"):
+            out["path"] = self._profile_call(profiles.save, p["name"], data, bool(p.get("overwrite")))
+        return out
+
+    async def h_profile_org(self, params, _conn):
+        """Set (``path``) or reset (``path: null``) where the org overlay file lives."""
+        from .provision import profiles
+
+        return {"path": self._profile_call(profiles.set_org_path, (params or {}).get("path"))}
+
+    async def h_pick_file(self, params, _conn):
+        """Native file chooser as the developer. ``{path: null}`` when cancelled."""
+        from . import desktop
+
+        params = params or {}
+        title, kind, start = params.get("title") or "Choose a file", params.get("kind") or "any", params.get("start") or ""
+        if not all(isinstance(v, str) for v in (title, kind, start)):
+            raise rpc.RpcError(rpc.INVALID_PARAMS, "title, kind and start are text")
+        try:
+            return {"path": await desktop.pick_file(title, kind, start)}
+        except desktop.PickError as exc:
+            raise rpc.RpcError(rpc.UNAVAILABLE, str(exc)) from exc
+
+    async def h_doctor(self, params, _conn):
+        from . import doctor
+
+        return await asyncio.to_thread(doctor.run, None, None, not (params or {}).get("no_databases"))
+
+    async def _repair_plan(self, params):
+        from .discover import scan
+        from .doctor import repair
+
+        params = params or {}
+        root = params.get("root")
+        if not isinstance(root, str) or not root:
+            raise rpc.RpcError(rpc.INVALID_PARAMS, "root is required")
+        python = params.get("python") or None
+        if python is not None and not isinstance(python, str):
+            raise rpc.RpcError(rpc.INVALID_PARAMS, "python must be a string like 3.12")
+        snap = await asyncio.to_thread(scan.scan, None, False)
+        inst = next((i for i in snap["installations"] if i["root"] == os.path.normpath(root)), None)
+        if inst is None:
+            raise rpc.RpcError(rpc.INVALID_PARAMS, f"{root} is not a discovered Odoo installation")
+        agent = await client.agent_status(inst["owner"]) if inst.get("owner") else {"state": "stopped"}
+        return await asyncio.to_thread(
+            repair.plan_venv_repair, inst, snap["processes"], python, params.get("custom", True) is not False,
+            bool(params.get("carry_extras")), agent["state"] == "running",
+        )
+
+    async def h_repair_plan(self, params, _conn):
+        """Dry run of the venv rebuild: checks, requirement files, packages not carried over, steps."""
+        return (await self._repair_plan(params)).as_dict()
+
+    async def h_repair_run(self, params, _conn):
+        """Rebuild a venv in the background. Progress arrives as repair.step, the end as repair.finished."""
+        from .doctor import repair
+
+        plan = await self._repair_plan(params)
+        if not plan.ok:
+            raise rpc.RpcError(rpc.CONFLICT, "; ".join(c.detail for c in plan.checks if c.status == "fail"))
+
+        async def work(report) -> dict:
+            return await repair.repair_venv(plan, report)
+
+        run_id = self._start_job("repair", work, {"root": plan.root, "venv": plan.venv})
+        return {"run_id": run_id, "root": plan.root}
+
+    async def _perms_plan(self, params):
+        from .discover import scan
+        from .doctor import permissions
+
+        root = (params or {}).get("root")
+        if not isinstance(root, str) or not root:
+            raise rpc.RpcError(rpc.INVALID_PARAMS, "root is required")
+        snap = await asyncio.to_thread(scan.scan, None, False)
+        try:
+            return permissions.plan_config_perms(snap, root)
+        except permissions.PermissionsError as exc:
+            raise rpc.RpcError(rpc.INVALID_PARAMS, str(exc)) from exc
+
+    async def h_perms_plan(self, params, _conn):
+        """Dry run of the config permission repair: every path with its current and target owner/group/mode."""
+        return (await self._perms_plan(params)).as_dict()
+
+    async def h_perms_run(self, params, _conn):
+        """Apply the standard config permissions with one sudo call. Progress as repair.step, end as repair.finished."""
+        from .doctor import permissions
+        from .provision import execute
+
+        plan = await self._perms_plan(params)
+
+        async def root_runner(script: str, rep) -> int:
+            self._unlocking, self._purpose = plan.run_as, "permissions"
+            try:
+                return await execute.sudo_runner(script, rep, {"ODP_ASKPASS_SOCK": self.askpass_path})
+            finally:
+                self._unlocking, self._purpose = None, "unlock"
+
+        async def work(report) -> dict:
+            return await permissions.apply_config_perms(plan, report, root_runner)
+
+        run_id = self._start_job("repair", work, {"root": plan.root, "repair": "config-perms"})
+        return {"run_id": run_id, "root": plan.root}
+
+    async def _config(self, params) -> tuple[str, dict]:
+        """Only configs that discovery found can be opened, saved or copied."""
+        from .discover import scan
+
+        path = (params or {}).get("path")
+        if not isinstance(path, str) or not path:
+            raise rpc.RpcError(rpc.INVALID_PARAMS, "path is required")
+        snap = await asyncio.to_thread(scan.scan, None, False)
+        if not any(i["path"] == path for i in snap["instances"]):
+            raise rpc.RpcError(rpc.INVALID_PARAMS, f"{path} is not a discovered Odoo config")
+        return path, snap
+
+    async def h_config_open(self, params, _conn):
+        """Config text with secrets masked (``reveal``: plain), its sha256, access and validation issues."""
+        from . import configedit
+
+        path, snap = await self._config(params)
+        try:
+            return (await asyncio.to_thread(configedit.open_config, path, bool((params or {}).get("reveal")), snap)).as_dict()
+        except configedit.ConfigError as exc:
+            raise rpc.RpcError(rpc.INVALID_PARAMS, str(exc)) from exc
+
+    async def h_config_validate(self, params, _conn):
+        from dataclasses import asdict
+
+        from . import configedit
+
+        path, snap = await self._config(params)
+        text = (params or {}).get("text")
+        if not isinstance(text, str):
+            raise rpc.RpcError(rpc.INVALID_PARAMS, "text is required")
+        return [asdict(i) for i in configedit.validate(text, snap, path)]
+
+    async def h_config_form(self, params, _conn):
+        """Form view data for ``text`` (masked or not) after the optional ``changes`` ({key: value or null})."""
+        from . import configedit
+
+        path, snap = await self._config(params)
+        text, changes = (params or {}).get("text"), (params or {}).get("changes") or {}
+        if not isinstance(text, str) or not isinstance(changes, dict) or \
+                not all(isinstance(v, str) or v is None for v in changes.values()):
+            raise rpc.RpcError(rpc.INVALID_PARAMS, "text is required; changes maps option names to text or null")
+        try:
+            return await asyncio.to_thread(configedit.form, text, snap, path, changes)
+        except configedit.ConfigError as exc:
+            raise rpc.RpcError(rpc.INVALID_PARAMS, str(exc)) from exc
+
+    async def h_modules_graph(self, params, _conn):
+        """Module dependency graph of a config's addons_path; ``module`` and ``depth`` add a focus on one module."""
+        from . import configedit, modules
+
+        path, snap = await self._config(params)
+        name, depth = (params or {}).get("module"), (params or {}).get("depth")
+        extra, database = (params or {}).get("extra") or [], (params or {}).get("database") or None
+        if name is not None and not isinstance(name, str) or depth is not None and not isinstance(depth, int):
+            raise rpc.RpcError(rpc.INVALID_PARAMS, "module is text, depth is a number")
+        if not isinstance(extra, list) or not all(isinstance(e, str) and e.startswith("/") for e in extra):
+            raise rpc.RpcError(rpc.INVALID_PARAMS, "extra is a list of absolute folders")
+        if database is not None and not isinstance(database, str):
+            raise rpc.RpcError(rpc.INVALID_PARAMS, "database is text")
+        try:
+            full = await asyncio.to_thread(modules.for_config, path, snap, name, depth, extra)
+        except KeyError as exc:
+            raise rpc.RpcError(rpc.INVALID_PARAMS, f"no module {exc.args[0]} in the addons_path") from exc
+        except (configedit.ConfigError, OSError) as exc:
+            raise rpc.RpcError(rpc.INVALID_PARAMS, str(exc)) from exc
+        full["db_error"] = None
+        if database:
+            from . import dbquery
+
+            try:
+                states = await dbquery.installed_modules(full["installation"] or "", database)
+                modules.overlay(full, states, full.get("series"))
+            except dbquery.QueryError as exc:
+                full["db_error"] = str(exc)
+        return full
+
+    # -- Y1-Y9: Python environment ------------------------------------------------
+
+    @staticmethod
+    def _py_error(exc: Exception) -> rpc.RpcError:
+        return rpc.RpcError(rpc.INVALID_PARAMS, str(exc))
+
+    async def _snap_procs(self) -> dict:
+        """Snapshot with processes (needed to warn about a running Odoo), without databases."""
+        from .discover import scan
+
+        return await asyncio.to_thread(scan.scan, None, False)
+
+    async def h_python_env(self, params, _conn):
+        """Interpreter (actual vs pinned), packages, requirement rows with status, conflicts, extras."""
+        from .pyenv import api
+
+        try:
+            return await asyncio.to_thread(api.show, params or {}, await self._snap_procs())
+        except api.ApiError as exc:
+            raise self._py_error(exc) from exc
+
+    async def h_python_reqfile(self, params, _conn):
+        """Add or remove a requirement file of an installation (op, root, path). Doctor and repairs use it."""
+        from .pyenv import api
+
+        try:
+            return await asyncio.to_thread(api.reqfile, params or {}, await self._snap_procs())
+        except api.ApiError as exc:
+            raise self._py_error(exc) from exc
+
+    async def h_python_disk(self, params, _conn):
+        from .pyenv import actions, env
+
+        try:
+            inst = env.installation(await self._snap_procs(), (params or {}).get("root"))
+        except env.EnvError as exc:
+            raise self._py_error(exc) from exc
+        return await asyncio.to_thread(actions.disk, inst)
+
+    async def h_python_export(self, params, _conn):
+        """Sanitized name==version list of the venv."""
+        from .pyenv import env
+
+        try:
+            inst = env.installation(await self._snap_procs(), (params or {}).get("root"))
+        except env.EnvError as exc:
+            raise self._py_error(exc) from exc
+        return {"text": await asyncio.to_thread(env.freeze, inst)}
+
+    async def h_python_tools(self, params, _conn):
+        from .pyenv import env, tools
+
+        root = (params or {}).get("root")
+        inst = None
+        if root:
+            try:
+                inst = env.installation(await self._snap_procs(), root)
+            except env.EnvError as exc:
+                raise self._py_error(exc) from exc
+        return {"tools": await asyncio.to_thread(tools.status, inst), "wkhtmltopdf": tools.WKHTML}
+
+    async def _python_plan(self, params):
+        from .pyenv import api
+
+        params = params or {}
+        snap = await self._snap_procs()
+        owner = None
+        if params.get("root"):
+            owner = next((i.get("owner") for i in snap["installations"] if i["root"] == params["root"]), None)
+        running = None
+        if owner and not (params.get("op") == "tool" and params.get("tool") != "debugpy"):
+            running = (await client.agent_status(owner))["state"] == "running"
+        try:
+            return await asyncio.to_thread(api.plan, params, snap, running)
+        except api.ApiError as exc:
+            raise self._py_error(exc) from exc
+
+    async def h_python_plan(self, params, _conn):
+        """Dry run: install packages, validate imports, or install a dev tool. Checks, steps, the root script."""
+        p = await self._python_plan(params)
+        return {k: v for k, v in p.items() if k != "session"} | ({"argv": p["session"]["argv"]} if "session" in p else {})
+
+    async def h_python_run(self, params, _conn):
+        """Run a python.plan in the background: python.step, python.finished."""
+        from .provision import execute
+        from .pyenv import api
+
+        p = await self._python_plan(params)
+        if not p["ok"]:
+            raise rpc.RpcError(rpc.CONFLICT, "; ".join(c["detail"] for c in p["checks"] if c["status"] == "fail"))
+        conn = await self.agent(p["session"]["user"]) if "session" in p else None
+
+        async def root_runner(script: str, rep) -> int:
+            self._unlocking, self._purpose = None, "tools"
+            try:
+                return await execute.sudo_runner(script, rep, {"ODP_ASKPASS_SOCK": self.askpass_path})
+            finally:
+                self._unlocking, self._purpose = None, "unlock"
+
+        async def work(report) -> dict:
+            return await api.execute(p, conn, report, root_runner)
+
+        run_id = self._start_job("python", work, {"kind": p["kind"], "root": (params or {}).get("root"),
+                                                  "tool": p.get("tool")})
+        return {"run_id": run_id, "kind": p["kind"]}
+
+    async def h_instance_logs(self, params, _conn):
+        """U8: log of an instance started outside the app: its config's logfile (read as you) or its unit's journal.
+        ``offset`` continues a logfile; without it the tail comes with a problem analysis."""
+        from . import extlogs, logs, services
+
+        p = params or {}
+        offset = p.get("offset")
+        if offset is not None and (not isinstance(offset, int) or isinstance(offset, bool) or offset < 0):
+            raise rpc.RpcError(rpc.INVALID_PARAMS, "offset is a byte position")
+        try:
+            src = extlogs.source(await self._snap(), p.get("path"))
+            out = {"source": src, "text": "", "offset": None, "start": 0, "rotated": False}
+            if src["kind"] == "logfile":
+                out.update(await asyncio.to_thread(extlogs.read, src["path"], offset))
+            elif src["kind"] == "journal":
+                out["text"] = await services.journal_async(src["unit"], 2000)
+        except (extlogs.ExtLogError, services.ServiceError) as exc:
+            raise rpc.RpcError(rpc.INVALID_PARAMS, str(exc)) from exc
+        if offset is None and out["text"]:
+            out["analysis"] = logs.analyze(out["text"])
+            out["sql"] = logs.sql_summary(out["text"])
+        return out
+
+    # -- Z1-Z4: database intelligence and performance ---------------------------------------
+
+    @staticmethod
+    def _meta_args(params) -> tuple[str, str]:
+        p = params or {}
+        root, database = p.get("root"), p.get("database")
+        if not isinstance(root, str) or not root or not isinstance(database, str) or not database:
+            raise rpc.RpcError(rpc.INVALID_PARAMS, "root and database are required")
+        return root, database
+
+    async def _meta(self, coro):
+        from .dbintel import meta
+
+        try:
+            return await coro
+        except meta.MetaError as exc:
+            raise rpc.RpcError(rpc.INVALID_PARAMS, str(exc)) from exc
+
+    async def h_db_models(self, params, _conn):
+        """Z1: models of a database from ir_model (search, page)."""
+        from .dbintel import meta
+
+        p = params or {}
+        return await self._meta(meta.models(*self._meta_args(p), p.get("q"), p.get("limit", 50), p.get("offset", 0)))
+
+    async def h_db_model(self, params, _conn):
+        from .dbintel import meta
+
+        return await self._meta(meta.model(*self._meta_args(params), (params or {}).get("model")))
+
+    async def h_db_xmlids(self, params, _conn):
+        from .dbintel import meta
+
+        p = params or {}
+        return await self._meta(meta.xmlids(*self._meta_args(p), p.get("q"), p.get("model") or None, p.get("limit", 50),
+                                            p.get("offset", 0)))
+
+    async def h_db_sizes(self, params, _conn):
+        """Z2: database size and largest tables (PostgreSQL facts, estimates)."""
+        from .dbintel import meta
+
+        return await self._meta(meta.sizes(*self._meta_args(params), (params or {}).get("limit", 50)))
+
+    async def h_db_count(self, params, _conn):
+        """Z2: exact row count of one table, capped."""
+        from .dbintel import meta
+
+        return await self._meta(meta.count(*self._meta_args(params), (params or {}).get("table")))
+
+    async def _perf_target(self, params) -> tuple[str, str | None, dict]:
+        """(root, database to connect through, snapshot). The database defaults to one a running instance uses,
+        else the first database of the role."""
+        p = params or {}
+        root = p.get("root")
+        from .discover import scan
+
+        snap = await asyncio.to_thread(scan.scan, None, True)
+        if not any(i["root"] == root for i in snap["installations"]):
+            raise rpc.RpcError(rpc.INVALID_PARAMS, f"{root} is not a discovered Odoo installation")
+        names = [d["name"] for e in snap.get("databases", []) if e["installation"] == root for d in e.get("databases", [])]
+        database = p.get("database") or next((x.get("database") for x in snap["processes"]
+                                              if x.get("installation") == root and x.get("database") in names), None) \
+            or (names[0] if names else None)
+        if database is not None and database not in names:
+            raise rpc.RpcError(rpc.INVALID_PARAMS, f"{database} is not a database of this installation's role")
+        return root, database, snap
+
+    async def h_perf_overview(self, params, _conn):
+        """Z3: PostgreSQL sessions, locks and connections (as the role), Odoo process CPU/memory, and a verdict."""
+        from .dbintel import activity
+
+        root, database, snap = await self._perf_target(params)
+        return await activity.overview(root, database, snap)
+
+    async def h_perf_cancel(self, params, _conn):
+        """Cancel the running query of one of the role's own sessions (pg_cancel_backend, never terminate)."""
+        from .dbintel import activity
+
+        root, database, _snap = await self._perf_target(params)
+        if database is None:
+            raise rpc.RpcError(rpc.INVALID_PARAMS, "no database to connect through")
+        try:
+            return await activity.cancel(root, database, (params or {}).get("pid"))
+        except activity.ActivityError as exc:
+            raise rpc.RpcError(rpc.CONFLICT, str(exc)) from exc
+
+    async def _grant_plan(self, params):
+        from .database import context
+        from .dbintel import activity
+
+        p = params or {}
+        root = p.get("root")
+        try:
+            _inst, ctx = await context.prepare(root)
+        except context.NotFound as exc:
+            raise rpc.RpcError(rpc.INVALID_PARAMS, str(exc)) from exc
+        checks = []
+        if ctx.conn is None:
+            raise rpc.RpcError(rpc.INVALID_PARAMS, "no config of this installation has a db_user")
+        local = not ctx.conn.host or ctx.conn.host.startswith("/") or ctx.conn.host in ("localhost", "127.0.0.1", "::1")
+        checks.append({"id": "local", "status": "ok" if local else "fail",
+                       "detail": "PostgreSQL runs on this machine" if local else
+                       f"PostgreSQL is on {ctx.conn.host}: ask its administrator to grant pg_monitor"})
+        try:
+            script = activity.grant_script(ctx.conn.user, bool(p.get("revoke")))
+        except activity.ActivityError as exc:
+            raise rpc.RpcError(rpc.INVALID_PARAMS, str(exc)) from exc
+        return {"root": root, "role": ctx.conn.user, "revoke": bool(p.get("revoke")), "script": script, "checks": checks,
+                "ok": local}
+
+    async def h_perf_grant_plan(self, params, _conn):
+        """The reviewed root script that grants (or revokes) pg_monitor to the installation's role."""
+        return await self._grant_plan(params)
+
+    async def h_perf_grant_run(self, params, _conn):
+        """Run the grant script with one sudo prompt (job kind ``perf``)."""
+        from .provision import execute
+
+        plan = await self._grant_plan(params)
+        if not plan["ok"]:
+            raise rpc.RpcError(rpc.CONFLICT, "; ".join(c["detail"] for c in plan["checks"] if c["status"] == "fail"))
+
+        async def work(report) -> dict:
+            fd, path = tempfile.mkstemp(prefix="odp-pg-monitor-", suffix=".sh")
+            with os.fdopen(fd, "w") as fh:
+                fh.write(plan["script"])
+            self._unlocking, self._purpose = None, "pg_monitor"
+            try:
+                code = await execute.sudo_runner(path, report, {"ODP_ASKPASS_SOCK": self.askpass_path})
+            finally:
+                self._unlocking, self._purpose = None, "unlock"
+                os.unlink(path)
+            if code != 0:
+                raise RuntimeError(f"the script exited with code {code}")
+            return {"role": plan["role"], "revoke": plan["revoke"]}
+
+        return {"run_id": self._start_job("perf", work, {"root": plan["root"]}), "role": plan["role"]}
+
+    # -- Q1-Q4: debugging and testing center ------------------------------------------
+
+    @staticmethod
+    def _debug_call(func, *args):
+        from .debug import launch, presets, vscode
+
+        try:
+            return func(*args)
+        except LookupError as exc:
+            raise rpc.RpcError(rpc.NOT_FOUND, str(exc).strip("'\"")) from exc
+        except (presets.PresetError, launch.LaunchError, vscode.VscodeError) as exc:
+            raise rpc.RpcError(rpc.INVALID_PARAMS, str(exc)) from exc
+
+    async def h_debug_presets(self, params, _conn):
+        """Presets, optionally of one instance (config path) or installation (root)."""
+        from .debug import presets
+
+        p = params or {}
+        try:
+            rows = await asyncio.to_thread(presets.load)
+            error = None
+        except presets.PresetError as exc:
+            rows, error = [], str(exc)
+        if p.get("instance"):
+            rows = [r for r in rows if r.get("instance") == p["instance"]]
+        if p.get("installation"):
+            snap = await self._snap()
+            configs = {i["path"] for i in snap["instances"] if i.get("installation") == p["installation"]}
+            rows = [r for r in rows if r.get("instance") in configs]
+        return {"presets": rows, "file": str(presets.presets_file()), "error": error}
+
+    async def h_debug_next_port(self, params, _conn):
+        from .debug import presets
+
+        return {"port": self._debug_call(presets.next_port, set(await asyncio.to_thread(_listening)))}
+
+    async def h_debug_save(self, params, _conn):
+        from .debug import presets
+
+        p = params or {}
+        return self._debug_call(presets.save, p.get("preset"), bool(p.get("overwrite")))
+
+    async def h_debug_delete(self, params, _conn):
+        from .debug import presets
+
+        return {"deleted": self._debug_call(presets.delete, (params or {}).get("id"))}
+
+    async def _debug_plan(self, params):
+        from .debug import launch, presets
+
+        preset = self._debug_call(presets.get, (params or {}).get("id"))
+        snap = await self._snap()
+        try:
+            return await launch.plan(preset, snap, set(await asyncio.to_thread(_listening)))
+        except launch.LaunchError as exc:
+            raise rpc.RpcError(rpc.INVALID_PARAMS, str(exc)) from exc
+
+    async def h_debug_plan(self, params, _conn):
+        """Checks, the exact command, who runs it, the attach settings and the preset's launch.json entry."""
+        from .debug import vscode
+
+        p = await self._debug_plan(params)
+        return {k: v for k, v in p.items() if k not in ("session", "test")} | {"entry": vscode.entry(p["preset"])}
+
+    async def h_debug_start(self, params, _conn):
+        """Server preset: start the session as the run-as user and return it. Test preset: a background job
+        (debug.step, debug.finished) that ends with the test result."""
+        from .debug import launch
+
+        p = await self._debug_plan(params)
+        if not p["ok"]:
+            raise rpc.RpcError(rpc.CONFLICT, "; ".join(c["detail"] for c in p["checks"] if c["status"] == "fail"))
+        conn = await self.agent(p["user"])
+        if p["kind"] == "server":
+            try:
+                return await launch.start(p, conn, lambda e: None)
+            except launch.LaunchError as exc:
+                raise rpc.RpcError(rpc.CONFLICT, str(exc)) from exc
+
+        async def work(report) -> dict:
+            return await launch.start(p, conn, report)
+
+        run_id = self._start_job("debug", work, {"preset": p["preset"]["id"], "attach": p["attach"]})
+        return {"kind": "test", "run_id": run_id, "attach": p["attach"]}
+
+    async def _vscode_plan(self, params):
+        from .debug import presets, vscode
+
+        p = params or {}
+        root = p.get("root")
+        snap = await self._snap()
+        if not any(i["root"] == root for i in snap["installations"]):
+            raise rpc.RpcError(rpc.INVALID_PARAMS, f"{root} is not a discovered Odoo installation")
+        configs = {i["path"] for i in snap["instances"] if i.get("installation") == root}
+        rows = [r for r in self._debug_call(presets.load) if r.get("instance") in configs]
+        return await asyncio.to_thread(vscode.plan, root, rows, bool(p.get("replace")))
+
+    async def h_debug_vscode_plan(self, params, _conn):
+        """What writing the installation's attach entries into <root>/.vscode/launch.json would change."""
+        return await self._vscode_plan(params)
+
+    async def h_debug_vscode_write(self, params, _conn):
+        from .debug import vscode
+
+        planned = await self._vscode_plan(params)
+        return self._debug_call(vscode.write, planned)
+
+    async def h_debug_open(self, params, _conn):
+        """Open a file at a line in the IDE (Q3: traceback frames)."""
+        from .git import opener
+
+        p = params or {}
+        try:
+            return {"argv": opener.open_file(p.get("file"), p.get("line"))}
+        except opener.OpenError as exc:
+            raise rpc.RpcError(rpc.UNAVAILABLE, str(exc)) from exc
+
+    # -- K1-K3: task runner ---------------------------------------------------------
+
+    @staticmethod
+    def _task_call(func, *args):
+        from .tasks import runner, workflow
+
+        try:
+            return func(*args)
+        except LookupError as exc:
+            raise rpc.RpcError(rpc.NOT_FOUND, str(exc).strip("'\"")) from exc
+        except (workflow.WorkflowError, runner.RunError) as exc:
+            raise rpc.RpcError(rpc.INVALID_PARAMS, str(exc)) from exc
+
+    async def h_tasks_list(self, params, _conn):
+        """Saved workflows and built-in recipes, with a parse error per file instead of failing the list."""
+        from .tasks import workflow
+
+        return await asyncio.to_thread(workflow.list_workflows)
+
+    async def h_tasks_ops(self, params, _conn):
+        from .tasks import steps, workflow
+
+        return {"ops": steps.catalog(), "param_kinds": list(workflow.PARAM_KINDS)}
+
+    async def h_tasks_read(self, params, _conn):
+        from .tasks import workflow
+
+        wf = self._task_call(workflow.load, (params or {}).get("name"))
+        return {k: wf[k] for k in ("name", "source", "path", "text", "digest")} | {
+            "title": wf["data"].get("name"), "description": wf["data"].get("description"),
+            "params": wf["data"].get("params", {}), "derived": sorted(workflow.known_names(wf["data"]) - set(wf["data"].get("params", {})))}
+
+    async def h_tasks_check(self, params, _conn):
+        """Check workflow text without saving it: {ok, error}."""
+        from .tasks import workflow
+
+        text = (params or {}).get("text")
+        if not isinstance(text, str):
+            raise rpc.RpcError(rpc.INVALID_PARAMS, "text is required")
+        try:
+            workflow.parse(text, "workflow")
+            return {"ok": True, "error": None}
+        except workflow.WorkflowError as exc:
+            return {"ok": False, "error": str(exc)}
+
+    async def h_tasks_save(self, params, _conn):
+        from .tasks import workflow
+
+        p = params or {}
+        return {"path": self._task_call(workflow.save, p.get("name"), p.get("text"), bool(p.get("overwrite")))}
+
+    async def h_tasks_delete(self, params, _conn):
+        """Move a saved workflow aside (.trash-NAME-TIME.toml). Built-in recipes cannot be deleted."""
+        from .tasks import workflow
+
+        return {"moved_to": self._task_call(workflow.delete, (params or {}).get("name"))}
+
+    def _task_env(self):
+        from .tasks import runner
+
+        return runner.LocalEnv(self.agent)
+
+    async def _task_target(self, params) -> tuple[str, dict, int, str | None]:
+        """(workflow, params, start step, retry_of) from {name, params} or {retry_of}."""
+        from .tasks import runner
+
+        p = params or {}
+        if p.get("retry_of"):
+            active = {self._task_run[0]} if self._task_run and not self._jobs["tasks"].done() else set()
+            point = self._task_call(runner.retry_point, p["retry_of"], None, active)
+            return point["workflow"], point["params"], point["start"], p["retry_of"]
+        if not isinstance(p.get("name"), str):
+            raise rpc.RpcError(rpc.INVALID_PARAMS, "name or retry_of is required")
+        return p["name"], p.get("params") or {}, 0, None
+
+    async def h_tasks_preview(self, params, _conn):
+        """Every step planned now: checks, exact commands, who runs it, and whether it waits for a confirmation."""
+        from .tasks import runner
+
+        name, given, start, _retry = await self._task_target(params)
+        try:
+            return await runner.preview(name, given, self._task_env(), start)
+        except LookupError as exc:
+            raise rpc.RpcError(rpc.NOT_FOUND, str(exc).strip("'\"")) from exc
+        except (runner.workflow.WorkflowError, runner.RunError) as exc:
+            raise rpc.RpcError(rpc.INVALID_PARAMS, str(exc)) from exc
+
+    async def h_tasks_run(self, params, _conn):
+        """Run a workflow (job kind ``tasks``): tasks.step events carry ``task_step``; a gated step sends status
+        ``gate`` and waits for tasks.confirm; the end is tasks.finished with the run result."""
+        from .tasks import runner
+
+        name, given, start, retry_of = await self._task_target(params)
+        env = self._task_env()
+        try:
+            await runner.preview(name, given, env, start)  # refuses bad parameters before a job starts
+        except LookupError as exc:
+            raise rpc.RpcError(rpc.NOT_FOUND, str(exc).strip("'\"")) from exc
+        except (runner.workflow.WorkflowError, runner.RunError) as exc:
+            raise rpc.RpcError(rpc.INVALID_PARAMS, str(exc)) from exc
+        holder: dict = {}
+
+        async def confirm(step: int, _plan: dict) -> bool:
+            fut = asyncio.get_running_loop().create_future()
+            key = (holder["run_id"], step)
+            self._task_gates[key] = fut
+            try:
+                return await asyncio.wait_for(fut, 3600)
+            except asyncio.TimeoutError:
+                return False
+            finally:
+                self._task_gates.pop(key, None)
+
+        async def work(report) -> dict:
+            return await runner.run(name, given, env, report, confirm, start, retry_of, holder["run_id"])
+
+        holder["run_id"] = run_id = os.urandom(4).hex()
+        self._start_job_with_id("tasks", work, {"workflow": name, "retry_of": retry_of}, run_id)
+        self._task_run = (run_id, env)
+        return {"run_id": run_id, "workflow": name, "start": start}
+
+    async def h_tasks_confirm(self, params, _conn):
+        """Answer a gate: approve true runs the step, false stops the run there."""
+        p = params or {}
+        fut = self._task_gates.get((p.get("run_id"), p.get("step")))
+        if fut is None or fut.done():
+            raise rpc.RpcError(rpc.NOT_FOUND, "no step is waiting for that confirmation")
+        fut.set_result(p.get("approve") is True)
+        return {"approved": p.get("approve") is True}
+
+    async def h_tasks_cancel(self, params, _conn):
+        """Stop after the step that is running now (a waiting gate is declined). A running step is never killed."""
+        run_id = (params or {}).get("run_id")
+        if not self._task_run or self._task_run[0] != run_id:
+            raise rpc.RpcError(rpc.NOT_FOUND, "no such task run")
+        self._task_run[1].cancel = True
+        for (rid, _step), fut in list(self._task_gates.items()):
+            if rid == run_id and not fut.done():
+                fut.set_result(False)
+        return {"cancelling": True}
+
+    async def h_tasks_history(self, params, _conn):
+        """Runs, newest first. A run without an end that is not running now shows as interrupted."""
+        from .tasks import runner
+
+        rows = await asyncio.to_thread(runner.history, None, (params or {}).get("workflow"))
+        active = self._task_run[0] if self._task_run and not self._jobs["tasks"].done() else None
+        for r in rows:
+            if r["status"] == "running" and r["run"] != active:
+                r["status"] = "interrupted"
+        return rows[:int((params or {}).get("limit") or 100)]
+
+    # -- M1-M9: module center ---------------------------------------------------
+
+    async def h_modules_center(self, params, _conn):
+        """Inventory of a config: modules with repository, manifest problems, uncommitted changes, database state."""
+        from .module_center import api
+
+        try:
+            return await api.load(params or {}, await self._snap(), with_changes=(params or {}).get("changes", True) is not False)
+        except api.ApiError as exc:
+            raise rpc.RpcError(rpc.INVALID_PARAMS, str(exc)) from exc
+
+    async def h_modules_plan(self, params, _conn):
+        """Dry run of upgrade, install or test: checks, steps with the exact command."""
+        from .module_center import api
+
+        p = params or {}
+        try:
+            planned = await api.plan(p.get("kind"), p, await self._snap())
+        except api.ApiError as exc:
+            raise rpc.RpcError(rpc.INVALID_PARAMS, str(exc)) from exc
+        return {k: v for k, v in planned.items() if k != "session"} | {"argv": planned["session"]["argv"], "user": planned["session"]["user"]}
+
+    async def h_modules_run(self, params, _conn):
+        """Run an upgrade, install or test in the background (job kind ``modules``): modules.step, modules.finished."""
+        from .module_center import api
+
+        p = params or {}
+        try:
+            planned = await api.plan(p.get("kind"), p, await self._snap())
+        except api.ApiError as exc:
+            raise rpc.RpcError(rpc.INVALID_PARAMS, str(exc)) from exc
+        if not planned["ok"]:
+            raise rpc.RpcError(rpc.CONFLICT, "; ".join(c["detail"] for c in planned["checks"] if c["status"] == "fail"))
+        conn = await self.agent(planned["session"]["user"])
+
+        async def work(report) -> dict:
+            return await api.execute(planned, conn, report)
+
+        run_id = self._start_job("modules", work, {"kind": planned["kind"], "database": planned["database"],
+                                                   "modules": planned["modules"], "config": planned["config"]})
+        return {"run_id": run_id, "kind": planned["kind"], "database": planned["database"]}
+
+    async def h_modules_tests(self, params, _conn):
+        """Test run history, newest first; ``installation`` filters."""
+        from .module_center import actions
+
+        root = (params or {}).get("installation")
+        rows = await asyncio.to_thread(actions.history)
+        return [r for r in rows if not root or r.get("installation") == root]
+
+    async def h_modules_drop_test(self, params, _conn):
+        """Drop a test database kept after a failed run (job kind ``db``)."""
+        from .module_center import actions
+
+        test_id = (params or {}).get("id")
+        if not isinstance(test_id, str):
+            raise rpc.RpcError(rpc.INVALID_PARAMS, "id is required")
+
+        async def work(report) -> dict:
+            try:
+                return {"test": await actions.drop_kept(test_id, report)}
+            except actions.ActionError as exc:
+                raise RuntimeError(str(exc)) from exc
+
+        return {"run_id": self._start_job("db", work, {"kind": "drop-test"})}
+
+    async def h_modules_scaffold_plan(self, params, _conn):
+        from .module_center import actions
+
+        p = params or {}
+        try:
+            return await asyncio.to_thread(actions.scaffold_plan, await self._snap(), p.get("installation"), p.get("folder"),
+                                           p.get("name"), p.get("title"), p.get("depends"))
+        except actions.ActionError as exc:
+            raise rpc.RpcError(rpc.INVALID_PARAMS, str(exc)) from exc
+
+    async def h_modules_scaffold(self, params, _conn):
+        """Create the module files of scaffold_plan (new files only; an existing folder is refused)."""
+        from .module_center import actions
+
+        p = params or {}
+        try:
+            planned = await asyncio.to_thread(actions.scaffold_plan, await self._snap(), p.get("installation"), p.get("folder"),
+                                              p.get("name"), p.get("title"), p.get("depends"))
+            return {"created": await asyncio.to_thread(actions.scaffold_create, planned), "target": planned["target"]}
+        except (actions.ActionError, OSError) as exc:
+            raise rpc.RpcError(rpc.INVALID_PARAMS, str(exc)) from exc
+
+    async def h_modules_open(self, params, _conn):
+        """Open a module folder of a config's inventory in the IDE, a terminal or the file manager."""
+        from .git import opener
+        from .module_center import api
+
+        p = params or {}
+        try:
+            graph = await api.load({"config": p.get("config")}, await self._snap(), with_changes=False)
+        except api.ApiError as exc:
+            raise rpc.RpcError(rpc.INVALID_PARAMS, str(exc)) from exc
+        info = graph["modules"].get(p.get("module"))
+        if info is None:
+            raise rpc.RpcError(rpc.NOT_FOUND, f"no module {p.get('module')} for this config")
+        try:
+            return {"argv": opener.open_path(info["path"], p.get("target", "ide"))}
+        except opener.OpenError as exc:
+            raise rpc.RpcError(rpc.UNAVAILABLE, str(exc)) from exc
+
+    async def h_docker_list(self, params, _conn):
+        """Odoo containers, read-only (docker ps and inspect). Its own call: a slow daemon does not slow the scan."""
+        from . import dockerprov
+        from .discover import docker
+
+        result = await asyncio.to_thread(docker.discover_docker)
+        for c in result["containers"]:
+            found = dockerprov.stack_of(c)  # a stack this app made: it may delete it
+            c["app_stack"] = found[0] if found else None
+        return {**result, "versions": list(dockerprov.VERSIONS), "stacks_root": dockerprov.stacks_root()}
+
+    async def _docker_new_plan(self, params):
+        from . import dockerprov
+        from .discover import docker
+
+        params = params or {}
+        port, addons = params.get("port"), params.get("addons") or None
+        if port is not None and (not isinstance(port, int) or isinstance(port, bool)):
+            raise rpc.RpcError(rpc.INVALID_PARAMS, "port must be a number")
+        if addons is not None and not isinstance(addons, str):
+            raise rpc.RpcError(rpc.INVALID_PARAMS, "addons must be a path")
+        found = await asyncio.to_thread(docker.discover_docker)
+        if found["error"]:
+            raise rpc.RpcError(rpc.CONFLICT, found["error"])
+        return await asyncio.to_thread(dockerprov.plan_new, str(params.get("name") or ""), str(params.get("version") or ""),
+                                       found["containers"], port, addons)
+
+    async def h_docker_new_plan(self, params, _conn):
+        """Dry run of a new Odoo stack in Docker: checks (name, folder, port), steps. Changes nothing."""
+        return (await self._docker_new_plan(params)).as_dict()
+
+    async def h_docker_new_run(self, params, _conn):
+        """Create the stack in the background. Progress arrives as docker.step, the end as docker.finished."""
+        from . import dockerprov
+
+        plan = await self._docker_new_plan(params)
+        if not plan.ok:
+            raise rpc.RpcError(rpc.CONFLICT, "; ".join(c.detail for c in plan.checks if c.status == "fail"))
+
+        async def work(report) -> dict:
+            return await dockerprov.run_new(plan, report)
+
+        run_id = self._start_job("docker", work, {"action": "new", "name": plan.name})
+        return {"run_id": run_id, "name": plan.name}
+
+    async def _docker_delete_plan(self, params):
+        from . import dockerops, dockerprov
+        from .discover import docker
+
+        params = params or {}
+        found = await asyncio.to_thread(docker.discover_docker)
+        if found["error"]:
+            raise rpc.RpcError(rpc.CONFLICT, found["error"])
+        try:
+            return dockerprov.plan_delete(params.get("container"), found["containers"], params.get("confirm") or None)
+        except dockerops.DockerError as exc:
+            raise rpc.RpcError(rpc.INVALID_PARAMS, str(exc)) from exc
+
+    async def h_docker_delete_plan(self, params, _conn):
+        """Dry run of deleting a stack this app made. Needs the stack name typed. Changes nothing."""
+        return (await self._docker_delete_plan(params)).as_dict()
+
+    async def h_docker_delete_run(self, params, _conn):
+        from . import dockerprov
+
+        plan = await self._docker_delete_plan(params)
+        if not plan.ok:
+            raise rpc.RpcError(rpc.CONFLICT, "; ".join(c.detail for c in plan.checks if c.status == "fail"))
+
+        async def work(report) -> dict:
+            return await dockerprov.run_delete(plan, report)
+
+        run_id = self._start_job("docker", work, {"action": "delete", "container": plan.container})
+        return {"run_id": run_id, "name": plan.name}
+
+    async def _docker_target(self, params):
+        from . import dockerops
+        from .discover import docker
+
+        name = (params or {}).get("container")
+        found = await asyncio.to_thread(docker.discover_docker)
+        if found["error"]:
+            raise rpc.RpcError(rpc.CONFLICT, found["error"])
+        try:
+            return dockerops, dockerops.find(found["containers"], name), found["containers"]
+        except dockerops.DockerError as exc:
+            raise rpc.RpcError(rpc.INVALID_PARAMS, str(exc)) from exc
+
+    async def _docker_plan(self, params):
+        mod, container, everything = await self._docker_target(params)
+        kind = params.get("action")
+        if kind not in mod.KINDS:
+            raise rpc.RpcError(rpc.INVALID_PARAMS, f"action must be one of {', '.join(mod.KINDS)}")
+        try:
+            return await asyncio.to_thread(mod.plan_action, kind, container, everything, params.get("database") or None,
+                                           params.get("update"), params.get("install"), None, params.get("demo", True) is not False)
+        except mod.DockerError as exc:
+            raise rpc.RpcError(rpc.INVALID_PARAMS, str(exc)) from exc
+
+    async def h_docker_plan(self, params, _conn):
+        """Dry run of start, stop, restart or a module upgrade in a container: checks, steps. Changes nothing."""
+        return (await self._docker_plan(params)).as_dict()
+
+    async def h_docker_run(self, params, _conn):
+        """Run a container action in the background. Progress arrives as docker.step, the end as docker.finished."""
+        from . import dockerops
+
+        plan = await self._docker_plan(params)
+        if not plan.ok:
+            raise rpc.RpcError(rpc.CONFLICT, "; ".join(c.detail for c in plan.checks if c.status == "fail"))
+
+        async def work(report) -> dict:
+            return await dockerops.run_action(plan, report)
+
+        run_id = self._start_job("docker", work, {"container": plan.container, "action": plan.kind})
+        return {"run_id": run_id, "container": plan.container}
+
+    async def h_docker_logs(self, params, _conn):
+        """The last lines of a container's log, grouped like a session log (levels, tracebacks, repeats)."""
+        from . import logs
+
+        mod, container, _all = await self._docker_target(params)
+        tail = (params or {}).get("tail", 500)
+        if not isinstance(tail, int) or isinstance(tail, bool):
+            raise rpc.RpcError(rpc.INVALID_PARAMS, "tail must be a number")
+        try:
+            text = await asyncio.to_thread(mod.read_logs, container["name"], tail)
+        except mod.DockerError as exc:
+            raise rpc.RpcError(rpc.CONFLICT, str(exc)) from exc
+        return {"text": text, "analysis": logs.analyze(text)}
+
+    async def h_docker_shell(self, params, _conn):
+        """The command that opens ``odoo shell`` in the container. It needs a terminal: the app shows it, you run it."""
+        import shlex
+
+        mod, container, _all = await self._docker_target(params)
+        try:
+            return {"command": shlex.join(mod.shell_argv(container, (params or {}).get("database") or ""))}
+        except mod.DockerError as exc:
+            raise rpc.RpcError(rpc.INVALID_PARAMS, str(exc)) from exc
+
+    async def h_compare_installations(self, params, _conn):
+        """Difference between two installations as a whole: version, commit, Python, venv packages."""
+        from . import compare
+        from .discover import scan
+
+        roots = [(params or {}).get(k) for k in ("a", "b")]
+        if not all(isinstance(r, str) and r for r in roots):
+            raise rpc.RpcError(rpc.INVALID_PARAMS, "a and b are installation roots")
+        snap = await asyncio.to_thread(scan.scan, None, False)
+        try:
+            return await asyncio.to_thread(compare.compare_installations, roots[0], roots[1], snap)
+        except KeyError as exc:
+            raise rpc.RpcError(rpc.INVALID_PARAMS, f"{exc.args[0]} is not a discovered installation") from exc
+
+    async def h_compare_databases(self, params, _conn):
+        """Modules that are installed in one database and not the other, or differ in state or version."""
+        from . import compare, dbquery
+
+        sides = []
+        for key in ("a", "b"):
+            side = (params or {}).get(key) or {}
+            if not isinstance(side.get("root"), str) or not isinstance(side.get("database"), str) or not side["database"]:
+                raise rpc.RpcError(rpc.INVALID_PARAMS, f"{key} needs root and database")
+            sides.append(side)
+        try:
+            a, b = [await dbquery.installed_modules(s["root"], s["database"]) for s in sides]
+        except dbquery.QueryError as exc:
+            raise rpc.RpcError(rpc.CONFLICT, str(exc)) from exc
+        return {"a": sides[0], "b": sides[1], "modules": compare.diff_modules(a, b),
+                "counts": {"a": len(a), "b": len(b)}}
+
+    async def h_compare(self, params, _conn):
+        """Difference between two discovered configs (``path`` and ``other``): facts, packages, addons_path, options."""
+        from . import compare
+
+        path, snap = await self._config(params)
+        other = (params or {}).get("other")
+        if not isinstance(other, str) or not any(i["path"] == other for i in snap["instances"]):
+            raise rpc.RpcError(rpc.INVALID_PARAMS, f"{other} is not a discovered Odoo config")
+        return await asyncio.to_thread(compare.compare, path, other, snap)
+
+    async def h_config_save(self, params, _conn):
+        from . import configedit
+
+        path, snap = await self._config(params)
+        text, base = (params or {}).get("text"), (params or {}).get("sha")
+        if not isinstance(text, str) or not isinstance(base, str):
+            raise rpc.RpcError(rpc.INVALID_PARAMS, "text and sha are required")
+        try:
+            return await asyncio.to_thread(configedit.save, path, text, base, snap)
+        except configedit.ConfigError as exc:
+            raise rpc.RpcError(rpc.CONFLICT, str(exc)) from exc
+
+    async def h_config_copy(self, params, _conn):
+        from . import configedit
+
+        path, snap = await self._config(params)
+        name = (params or {}).get("name")
+        if not isinstance(name, str) or not name:
+            raise rpc.RpcError(rpc.INVALID_PARAMS, "name is required")
+        inst = next((i for i in snap["instances"] if i["path"] == path), {})
+        owner = next((i.get("owner") for i in snap["installations"] if i["root"] == inst.get("installation")), None)
+        try:
+            return await asyncio.to_thread(configedit.copy, path, name, owner == pwd.getpwuid(os.getuid()).pw_name,
+                                           configedit.copy_folder(path, inst.get("installation")))
+        except configedit.ConfigError as exc:
+            raise rpc.RpcError(rpc.CONFLICT, str(exc)) from exc
+
+    async def _db_prepare(self, params):
+        from .database import context
+
+        params = params or {}
+        root = params.get("root")
+        if not isinstance(root, str) or not root:
+            raise rpc.RpcError(rpc.INVALID_PARAMS, "root is required")
+        try:
+            if root.startswith("docker:"):
+                from . import dockerdb, dockerops
+
+                try:
+                    return await dockerdb.prepare(root[len("docker:"):])
+                except dockerops.DockerError as exc:
+                    raise context.NotFound(str(exc)) from exc
+            return await context.prepare(root)
+        except context.NotFound as exc:
+            raise rpc.RpcError(rpc.INVALID_PARAMS, str(exc)) from exc
+
+    @staticmethod
+    def _db_module(params):
+        """``database.ops`` for an installation root, ``dockerdb`` for ``docker:<container>``: same interface."""
+        from . import dockerdb
+        from .database import ops
+
+        return dockerdb if str((params or {}).get("root", "")).startswith("docker:") else ops
+
+    async def h_db_list(self, params, _conn):
+        """Databases of one installation's role, plus the recipes that can be run on them."""
+        from .database import recipes
+
+        _inst, ctx = await self._db_prepare(params)
+        if self._db_module(params).__name__.endswith("dockerdb"):
+            return {"databases": ctx.databases, "error": ctx.list_error, "recipes": await asyncio.to_thread(recipes.available),
+                    "agent_running": None}
+        return {"databases": ctx.databases, "error": getattr(ctx, "listing_error", None),
+                "recipes": await asyncio.to_thread(recipes.available), "agent_running": ctx.agent_running}
+
+    async def _db_plan(self, params):
+        ops = self._db_module(params)
+        inst, ctx = await self._db_prepare(params)
+        fields = {k: params.get(k) or None for k in ("source", "target", "backup", "dest", "recipe", "confirm")}
+        for key, value in fields.items():
+            if value is not None and not isinstance(value, str):
+                raise rpc.RpcError(rpc.INVALID_PARAMS, f"{key} must be a string")
+        kind = params.get("action")
+        if kind not in ops.KINDS:
+            raise rpc.RpcError(rpc.INVALID_PARAMS, f"action must be one of {', '.join(ops.KINDS)}")
+        keep = params.get("keep")
+        if keep is not None and (not isinstance(keep, int) or isinstance(keep, bool)):
+            raise rpc.RpcError(rpc.INVALID_PARAMS, "keep must be a number")
+        return await asyncio.to_thread(ops.plan_db, kind, inst, ctx, keep=keep, **fields)
+
+    async def h_db_plan(self, params, _conn):
+        """Dry run of a database action: checks, steps. Changes nothing. The password never leaves the sidecar."""
+        return (await self._db_plan(params)).as_dict()
+
+    async def h_db_run(self, params, _conn):
+        """Run a database action in the background. Progress arrives as db.step, the end as db.finished."""
+        ops = self._db_module(params)
+        plan = await self._db_plan(params)
+        if not plan.ok:
+            raise rpc.RpcError(rpc.CONFLICT, "; ".join(c.detail for c in plan.checks if c.status == "fail"))
+
+        async def work(report) -> dict:
+            return await ops.run_db(plan, report)
+
+        run_id = self._start_job("db", work, {"root": plan.root, "action": plan.kind, "source": plan.source, "target": plan.target})
+        return {"run_id": run_id, "root": plan.root}
+
+    async def h_db_snapshots(self, params, _conn):
+        """Snapshots of one installation or container (optionally of one database), newest first."""
+        from . import dockerdb
+        from .database import ops
+
+        inst, ctx = await self._db_prepare(params)
+        database = (params or {}).get("database") or None
+        if self._db_module(params) is dockerdb:
+            return {"snapshots": await asyncio.to_thread(dockerdb.list_snapshots, inst["name"], database, ctx.home), "error": None}
+        try:
+            return {"snapshots": await ops.list_snapshots(inst, ctx, database), "error": None}
+        except ops.DbError as exc:
+            return {"snapshots": [], "error": str(exc)}
+
+    async def h_discover(self, params, _conn):
+        from pathlib import Path
+
+        from .discover import scan
+
+        roots = [Path(r) for r in (params or {}).get("roots") or []] or None
+        return await asyncio.to_thread(scan.scan, roots, not (params or {}).get("no_databases"))
+
+    async def h_services_list(self, params, _conn):
+        from . import services
+
+        return await asyncio.to_thread(services.list_services)
+
+    async def h_services_action(self, params, _conn):
+        from . import services
+
+        p = params or {}
+        self._unlocking, self._purpose = pwd.getpwuid(os.getuid()).pw_name, "service"
+        try:
+            output = await services.run_action_askpass(p.get("action", ""), p.get("name", ""), {"ODP_ASKPASS_SOCK": self.askpass_path})
+        except services.ServiceError as exc:
+            raise rpc.RpcError(rpc.INVALID_PARAMS, str(exc)) from exc
+        finally:
+            self._unlocking, self._purpose = None, "unlock"
+        return {"output": output}
+
+    async def h_services_journal(self, params, _conn):
+        from . import services
+
+        p = params or {}
+        try:
+            return {"text": await services.journal_async(p.get("name", ""), int(p.get("lines") or 200), p.get("since"))}
+        except services.ServiceError as exc:
+            raise rpc.RpcError(rpc.INVALID_PARAMS, str(exc)) from exc
+
+    async def h_services_show(self, params, _conn):
+        from . import services
+
+        try:
+            return await asyncio.to_thread(services.read_unit, (params or {}).get("name", ""))
+        except services.ServiceError as exc:
+            raise rpc.RpcError(rpc.INVALID_PARAMS, str(exc)) from exc
+
+    async def h_adopt(self, params, _conn):
+        """Adopt or release (``adopt: false``) a discovered installation. Writes the registry only."""
+        from .discover import registry, scan
+
+        root = (params or {}).get("root")
+        if not isinstance(root, str) or not root:
+            raise rpc.RpcError(rpc.INVALID_PARAMS, "root is required")
+        root = os.path.normpath(root)
+        try:
+            if (params or {}).get("adopt", True):
+                snap = await asyncio.to_thread(scan.scan, None, False)
+                inst = next((i for i in snap["installations"] if i["root"] == root), None)
+                if inst is None:
+                    raise rpc.RpcError(rpc.INVALID_PARAMS, f"{root} is not a discovered Odoo installation")
+                return registry.adopt(inst, (params or {}).get("name"))
+            return {"released": registry.release(root)}
+        except registry.RegistryError as exc:
+            raise rpc.RpcError(rpc.INVALID_PARAMS, str(exc)) from exc
+
+    async def h_debug_print(self, params, _conn):
+        # Proves that stray prints cannot corrupt the RPC stream: stdout points to stderr.
+        print((params or {}).get("text", "stray print"))
+        return True
+
+    # -- main loop --------------------------------------------------------
+
+    async def run(self, rpc_in: int, rpc_out: int) -> None:
+        loop = asyncio.get_running_loop()
+        reader = asyncio.StreamReader(limit=rpc.MAX_FRAME)
+        await loop.connect_read_pipe(lambda: asyncio.StreamReaderProtocol(reader), os.fdopen(rpc_in, "rb", 0))
+        transport, protocol = await loop.connect_write_pipe(
+            asyncio.streams.FlowControlMixin, os.fdopen(rpc_out, "wb", 0)
+        )
+        writer = asyncio.StreamWriter(transport, protocol, reader, loop)
+        await self._start_askpass_server()
+        self.ui = rpc.Connection(reader, writer, self.handlers(), name="ui")
+        try:
+            await self.ui.serve()
+        finally:
+            for conn in list(self.agents.values()):
+                await conn.close()
+            if self._askpass_server:
+                self._askpass_server.close()
+            try:
+                os.unlink(self.askpass_path)
+            except FileNotFoundError:
+                pass
+
+
+def _listening() -> list[int]:
+    from .discover.ports import listening_ports
+
+    return list(listening_ports())
+
+
+def _user(params) -> str:
+    user = (params or {}).get("user")
+    if not isinstance(user, str) or not user:
+        raise rpc.RpcError(rpc.INVALID_PARAMS, "user is required")
+    try:
+        pwd.getpwnam(user)
+    except KeyError as exc:
+        raise rpc.RpcError(rpc.INVALID_PARAMS, f"unknown user {user}") from exc
+    return user
+
+
+def main() -> int:
+    # Keep a private copy of the real stdout for RPC, then send fd 1 to stderr,
+    # so a print() anywhere in the process can never corrupt the RPC stream.
+    rpc_out = os.dup(1)
+    os.dup2(2, 1)
+    sys.stdout = sys.stderr
+    logging.basicConfig(
+        stream=sys.stderr, level=logging.INFO, format="%(asctime)s sidecar %(levelname)s %(name)s: %(message)s"
+    )
+    asyncio.run(Sidecar().run(0, rpc_out))
+    return 0
