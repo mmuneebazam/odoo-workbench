@@ -83,7 +83,7 @@ The application and Python core in this repository are derived from an actively 
 - [Security model](SECURITY.md)
 - [Contributing](CONTRIBUTING.md)
 - [Launch copy](marketing/launch-post.md)
-- [Publish to GitHub](PUSH_TO_GITHUB.md)
+  
 
 ## Attribution, trademark & license
 
