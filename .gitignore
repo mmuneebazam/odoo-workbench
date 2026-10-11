@@ -1,0 +1,13 @@
+__pycache__/
+*.pyc
+packaging/build/
+.specstory/
+spike/.out/
+
+# Private notes (roadmap, evaluation, client details). Never published.
+private-docs/
+
+.vscode/
+
+# Website build output (website/build.py)
+website/_site/
