@@ -1,0 +1,54 @@
+name: Free setup consultation
+description: Request a complimentary short onboarding call for an Odoo development workflow.
+title: "Free consultation: "
+labels: ["consultation"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        This is a community-maintained project. We can offer a free 20-minute setup consultation to early adopters, subject to maintainer availability. **Do not post passwords, tokens, config files, database dumps, customer data or private hostnames here.**
+  - type: input
+    id: odoo-version
+    attributes:
+      label: Odoo version(s)
+      placeholder: "e.g. 17 and 18"
+    validations:
+      required: true
+  - type: input
+    id: ubuntu-version
+    attributes:
+      label: Ubuntu version
+      placeholder: "e.g. 24.04"
+    validations:
+      required: true
+  - type: dropdown
+    id: workflow
+    attributes:
+      label: What do you want help with?
+      options:
+        - First-time setup
+        - Multiple Odoo installations
+        - Database backups or snapshots
+        - Docker workflow
+        - Modules, tests or debugging
+        - Performance investigation
+        - Something else
+    validations:
+      required: true
+  - type: textarea
+    id: problem
+    attributes:
+      label: What is blocking you?
+      description: Share a short, sanitized description. Do not paste secrets, database dumps or private configurations.
+      placeholder: "What did you expect, and what happened instead?"
+    validations:
+      required: true
+  - type: checkboxes
+    id: privacy
+    attributes:
+      label: Privacy and availability
+      options:
+        - label: I have not included credentials, tokens, private config files, customer data or database dumps.
+          required: true
+        - label: I understand that a maintainer will respond publicly first; contact/scheduling details should only be shared privately if a maintainer follows up.
+          required: true
