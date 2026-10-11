@@ -1,0 +1,24 @@
+Odoo Workbench derivative notice
+
+This repository contains code derived from Odoo Dev Panel:
+https://github.com/SparkDrago05/odoo-dev-panel
+Initial source revision used for this derivative: `1318616872e522aa90eb1d6285ab898f723addb5` (2026-10-10).
+
+The upstream project is copyright its original contributors and was distributed under
+Apache License, Version 2.0. Its source license is retained in this repository's
+LICENSE file. The upstream project and its authors are not affiliated with, and do
+not endorse, Odoo Workbench.
+
+Changes in this derivative include product naming and presentation, application
+branding, refreshed project documentation and website, original visual assets,
+launch copy, and GitHub project configuration. Modified upstream files carry a
+file-level change notice where their format permits it. Package/runtime identifiers
+and the `odp` command are intentionally retained where needed for compatibility.
+
+Original upstream source and its original notices remain subject to the terms of
+Apache License 2.0. New Odoo Workbench artwork and documentation were created for
+this derivative. Third-party dependencies and bundled assets retain their own
+licenses where applicable.
+
+Trademark note: Odoo is a trademark of Odoo S.A. This independent community project
+is not affiliated with, sponsored by, or endorsed by Odoo S.A.
