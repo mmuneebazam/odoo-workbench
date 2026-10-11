@@ -1,0 +1,56 @@
+# Modified for the Odoo Workbench derivative, 2026. Builds the website only; no upstream APT key is reused.
+name: Pages
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "website/**"
+      - "docs/**"
+      - "README.md"
+      - "NOTICE"
+      - "LICENSE"
+      - "SECURITY.md"
+      - "CONTRIBUTING.md"
+      - ".github/workflows/pages.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build documentation website
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install Markdown renderer
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq python3-markdown
+      - name: Build site
+        env:
+          GITHUB_REPOSITORY: ${{ github.repository }}
+        run: python3 website/build.py site
+      - uses: actions/configure-pages@v6
+      - uses: actions/upload-pages-artifact@v5
+        with:
+          path: site
+
+  deploy:
+    name: Deploy to GitHub Pages
+    needs: build
+    runs-on: ubuntu-24.04
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v5
