@@ -1,0 +1,48 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 480" role="img" aria-labelledby="title desc">
+  <title id="title">Odoo Workbench local architecture</title>
+  <desc id="desc">The desktop interface talks to a local Python core, which uses a separate Linux user agent to start Odoo processes and access PostgreSQL.</desc>
+  <defs>
+    <linearGradient id="panel" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#22212c"/><stop offset="1" stop-color="#171820"/></linearGradient>
+    <linearGradient id="accent" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#c3a9ff"/><stop offset="1" stop-color="#8062ec"/></linearGradient>
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="150%"><feDropShadow dx="0" dy="12" stdDeviation="16" flood-color="#000" flood-opacity=".24"/></filter>
+    <marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto"><path d="M0 0 10 5 0 10Z" fill="#9b83eb"/></marker>
+    <style>
+      .t{font-family:Inter,ui-sans-serif,system-ui,-apple-system,'Segoe UI',sans-serif;fill:#f2f1f7}.muted{fill:#a0a0af}.small{font-size:15px}.tiny{font-size:12px}.bold{font-weight:650}.line{stroke:#9b83eb;stroke-width:2.2;fill:none;marker-end:url(#arrow)}
+    </style>
+  </defs>
+  <rect width="1200" height="480" rx="26" fill="#121319" stroke="#2d2f39"/>
+  <text x="42" y="56" class="t" font-size="20" font-weight="680">Local by design. Clear boundaries.</text>
+  <text x="42" y="81" class="muted small">The interface never becomes a remote control plane for your server.</text>
+  <g filter="url(#shadow)">
+    <rect x="42" y="128" width="244" height="176" rx="18" fill="url(#panel)" stroke="#3a3b49"/>
+    <rect x="326" y="128" width="244" height="176" rx="18" fill="url(#panel)" stroke="#3a3b49"/>
+    <rect x="610" y="128" width="244" height="176" rx="18" fill="url(#panel)" stroke="#3a3b49"/>
+    <rect x="894" y="128" width="264" height="176" rx="18" fill="url(#panel)" stroke="#3a3b49"/>
+  </g>
+  <!-- Desktop -->
+  <rect x="67" y="154" width="38" height="38" rx="12" fill="url(#accent)"/><rect x="77" y="164" width="7" height="7" rx="2" fill="#fff"/><rect x="87" y="164" width="7" height="7" rx="2" fill="#fff" opacity=".7"/><rect x="77" y="174" width="7" height="7" rx="2" fill="#fff" opacity=".7"/><rect x="87" y="174" width="7" height="7" rx="2" fill="#201830"/>
+  <text x="118" y="174" class="t small bold">Desktop app</text><text x="68" y="220" class="muted small">Tauri · React</text><text x="68" y="246" class="muted tiny">UI, plans, confirmations</text><text x="68" y="267" class="muted tiny">and read-only views.</text>
+  <rect x="68" y="280" width="113" height="8" rx="4" fill="#5b4b88"/><rect x="68" y="280" width="70" height="8" rx="4" fill="#b39aff"/>
+  <!-- sidecar -->
+  <rect x="352" y="154" width="38" height="38" rx="12" fill="#2a2440" stroke="#7860bc"/><path d="M362 165h18m-18 6h18m-18 6h12" stroke="#c8b4ff" stroke-width="1.8" stroke-linecap="round"/>
+  <text x="403" y="174" class="t small bold">Local Python core</text><text x="352" y="220" class="muted small">CLI + sidecar</text><text x="352" y="246" class="muted tiny">Discovery, diagnostics, DB</text><text x="352" y="267" class="muted tiny">and environment operations.</text>
+  <rect x="352" y="280" width="156" height="8" rx="4" fill="#34313f"/><rect x="352" y="280" width="94" height="8" rx="4" fill="#9278df"/>
+  <!-- agent -->
+  <rect x="637" y="154" width="38" height="38" rx="12" fill="#1e332a" stroke="#3c8a64"/><path d="M646 173h20m-16-6 4 6-4 6m12-12-4 6 4 6" fill="none" stroke="#7cdaa5" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/>
+  <text x="688" y="174" class="t small bold">Run-as agent</text><text x="636" y="220" class="muted small">Per Linux user</text><text x="636" y="246" class="muted tiny">One unlock per boot; own</text><text x="636" y="267" class="muted tiny">session and log stream.</text>
+  <rect x="636" y="280" width="165" height="8" rx="4" fill="#29322e"/><rect x="636" y="280" width="106" height="8" rx="4" fill="#57bd87"/>
+  <!-- Odoo/Postgres -->
+  <rect x="920" y="154" width="38" height="38" rx="12" fill="#202b3b" stroke="#536d96"/><path d="M929 164h20l-10-5Zm0 1v14h20v-14m-13 2v3m6-3v3" fill="none" stroke="#a9c6f4" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+  <text x="971" y="174" class="t small bold">Odoo + PostgreSQL</text><text x="920" y="220" class="muted small">Native or Docker</text><text x="920" y="246" class="muted tiny">Processes keep running when</text><text x="920" y="267" class="muted tiny">the UI closes.</text>
+  <rect x="920" y="280" width="183" height="8" rx="4" fill="#29303b"/><rect x="920" y="280" width="130" height="8" rx="4" fill="#6c91cb"/>
+  <!-- links -->
+  <path d="M288 214h26" class="line"/><text x="288" y="196" class="muted tiny">JSON-RPC</text>
+  <path d="M572 214h26" class="line"/><text x="566" y="196" class="muted tiny">Unix socket</text>
+  <path d="M856 214h26" class="line"/><text x="856" y="196" class="muted tiny">owned processes</text>
+  <rect x="42" y="346" width="1116" height="88" rx="16" fill="#1a1b23" stroke="#30323d"/>
+  <circle cx="75" cy="389" r="16" fill="#302842"/><path d="M75 379v10l7 4" fill="none" stroke="#c3a8ff" stroke-width="1.8" stroke-linecap="round"/>
+  <text x="105" y="383" class="t small bold">Your changes are reviewable before they run.</text>
+  <text x="105" y="407" class="muted small">Destructive database actions show a plan, ask for confirmation, and keep snapshots or backups when configured.</text>
+  <text x="1008" y="389" class="t tiny">No cloud service</text><circle cx="990" cy="385" r="4" fill="#5bd292"/>
+  <text x="1008" y="410" class="t tiny">No telemetry by default</text><circle cx="990" cy="406" r="4" fill="#5bd292"/>
+</svg>

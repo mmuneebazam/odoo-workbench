@@ -1,0 +1,230 @@
+<!-- Modified for the Odoo Workbench derivative, 2026. Original project artwork and rewritten presentation. -->
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#111117">
+  <meta name="repository" content="{{repository}}">
+  <meta name="description" content="A local-first desktop workspace for Odoo development. Discover installations, run instances, protect databases, manage Docker, modules, Git and Python—desktop app plus CLI.">
+  <meta property="og:title" content="Odoo Workbench — your local Odoo development workspace">
+  <meta property="og:description" content="One calm, local-first control room for the work around Odoo development.">
+  <meta property="og:type" content="website">
+  <meta property="og:url" content="{{site_url}}">
+  <meta property="og:image" content="{{social_image}}">
+  <meta name="twitter:card" content="summary_large_image">
+  <title>Odoo Workbench — local-first Odoo development</title>
+  <link rel="icon" type="image/svg+xml" href="assets/workbench-mark.svg">
+  <link rel="preload" href="assets/workbench-hero.webp" as="image" type="image/webp">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <a class="skip-link" href="#main">Skip to content</a>
+  <header class="site-header">
+    <div class="wrap nav-row">
+      <a class="brand" href="./" aria-label="Odoo Workbench home">
+        <img src="assets/workbench-mark.svg" width="38" height="38" alt="">
+        <span>odoo<span class="brand-dot">.</span>workbench</span>
+      </a>
+      <button class="menu-toggle" type="button" aria-expanded="false" aria-controls="site-nav" aria-label="Open menu"><span></span><span></span></button>
+      <nav class="site-nav" id="site-nav" aria-label="Main navigation">
+        <a href="#features">Capabilities</a>
+        <a href="#how-it-works">How it works</a>
+        <a href="docs/install.html">Get started</a>
+        <a href="docs/security.html">Security</a>
+        <a class="nav-github" href="#" data-github="" aria-label="Open Odoo Workbench on GitHub">GitHub <span aria-hidden="true">↗</span></a>
+      </nav>
+    </div>
+  </header>
+
+  <main id="main">
+    <section class="hero">
+      <div class="hero-noise" aria-hidden="true"></div>
+      <div class="wrap hero-grid">
+        <div class="hero-copy">
+          <div class="eyebrow"><span class="pulse"></span> Local-first · desktop + CLI · open source</div>
+          <h1>Your Odoo<br>dev work,<br><em>in one place.</em></h1>
+          <p class="hero-lead">A clear, calm workspace for the installations, databases, modules and tools around your Odoo projects. Built to keep the real work on your own machine.</p>
+          <div class="hero-actions">
+            <a class="button button-primary" href="#features">Explore the workspace <span aria-hidden="true">↓</span></a>
+            <a class="button button-quiet" href="#consultation">Get a free setup consult <span aria-hidden="true">↗</span></a>
+          </div>
+          <div class="hero-proof">
+            <span><i class="check-icon">✓</i> Desktop app + <code>odp</code> CLI</span>
+            <span><i class="check-icon">✓</i> Odoo 15–20</span>
+            <span><i class="check-icon">✓</i> Ubuntu 24.04 / 26.04</span>
+          </div>
+          <p class="hero-note">Independent community derivative of Odoo Dev Panel · Apache-2.0 · not an official Odoo product</p>
+        </div>
+        <div class="hero-photo-wrap">
+          <div class="photo-halo" aria-hidden="true"></div>
+          <img class="hero-photo" src="assets/workbench-hero.webp" width="1536" height="1024" alt="An editorial illustration of a developer workstation with a local engineering dashboard on screen">
+          <div class="photo-label"><span class="photo-label-mark">W</span><span><strong>Built around your machine</strong><small>No hosted control plane required</small></span><span class="photo-label-arrow">↗</span></div>
+          <div class="photo-index">01 <span>/</span> LOCAL-FIRST</div>
+        </div>
+      </div>
+      <div class="hero-bottom wrap">
+        <span>For the work around Odoo</span>
+        <div class="hero-bottom-rule"></div>
+        <span>Discover <b>·</b> Run <b>·</b> Protect <b>·</b> Debug</span>
+      </div>
+    </section>
+
+    <section class="intro section" id="features">
+      <div class="wrap">
+        <div class="section-kicker"><span>01 / THE WORKSPACE</span><span class="kicker-line"></span><span>One desktop. The whole development loop.</span></div>
+        <div class="intro-head">
+          <h2>From first scan<br>to last traceback.</h2>
+          <p>Stop stitching together a different terminal command for every Odoo install. Workbench brings your local development environment into focus—and puts the next safe action within reach.</p>
+        </div>
+        <figure class="dashboard-frame">
+          <div class="frame-top"><span class="frame-lights"><i></i><i></i><i></i></span><span>Odoo Workbench <span class="frame-divider">/</span> Workspace overview</span><span class="frame-live"><i></i> LOCAL PREVIEW</span></div>
+          <img src="assets/workbench-dashboard.svg" width="1440" height="920" loading="lazy" alt="Illustrative Odoo Workbench dashboard concept with installation health, databases, sessions, a performance chart and module dependencies">
+          <figcaption>Interface concept for the Workbench feature set · not a captured product screenshot</figcaption>
+        </figure>
+      </div>
+    </section>
+
+    <section class="capabilities section section-soft">
+      <div class="wrap">
+        <div class="section-kicker"><span>02 / CAPABILITIES</span><span class="kicker-line"></span><span>Made for the details that slow you down</span></div>
+        <div class="capability-grid">
+          <article class="cap-card cap-featured">
+            <div class="cap-top"><span class="cap-number">01</span><span class="cap-icon icon-violet">⌘</span></div>
+            <h3>Find the whole picture.</h3>
+            <p>Discover source trees, virtualenvs, configs, databases, filestores, active processes and systemd units—without touching them.</p>
+            <div class="cap-tags"><span>Discovery</span><span>Doctor</span><span>Health checks</span></div>
+          </article>
+          <article class="cap-card">
+            <div class="cap-top"><span class="cap-number">02</span><span class="cap-icon icon-green">↗</span></div>
+            <h3>Run Odoo on your terms.</h3>
+            <p>Start an instance with its own Linux user, database, modules and dev flags. Watch logs and stop it deliberately; closing Workbench won’t stop Odoo.</p>
+            <div class="cap-tags"><span>Sessions</span><span>Services</span></div>
+          </article>
+          <article class="cap-card">
+            <div class="cap-top"><span class="cap-number">03</span><span class="cap-icon icon-amber">◈</span></div>
+            <h3>Keep database work reversible.</h3>
+            <p>Back up, restore, clone with filestore, neutralize, snapshot and revert. Review the plan before every operation that changes data.</p>
+            <div class="cap-tags"><span>Backups</span><span>Snapshots</span><span>Restore</span></div>
+          </article>
+          <article class="cap-card">
+            <div class="cap-top"><span class="cap-number">04</span><span class="cap-icon icon-blue">⤳</span></div>
+            <h3>Understand modules at a glance.</h3>
+            <p>Trace dependencies, required-by links, missing and shadowed addons, version drift and per-database install state. Run tests in a throwaway database.</p>
+            <div class="cap-tags"><span>Dependency map</span><span>Module tests</span></div>
+          </article>
+          <article class="cap-card">
+            <div class="cap-top"><span class="cap-number">05</span><span class="cap-icon icon-violet">▦</span></div>
+            <h3>Stay in sync across environments.</h3>
+            <p>Provision Odoo 15–20, manage Docker + PostgreSQL, check Python requirements and see repository branches, changes and sync state in one place.</p>
+            <div class="cap-tags"><span>Provision</span><span>Docker</span><span>Git</span><span>Python</span></div>
+          </article>
+          <article class="cap-card">
+            <div class="cap-top"><span class="cap-number">06</span><span class="cap-icon icon-rose">⌁</span></div>
+            <h3>Debug the hard-to-see stuff.</h3>
+            <p>Build repeatable task flows, attach debugpy and VS Code, inspect PostgreSQL sessions and locks, and find the pressure point behind a slow page.</p>
+            <div class="cap-tags"><span>Tasks</span><span>Debug</span><span>Performance</span></div>
+          </article>
+        </div>
+        <div class="capability-foot"><span class="foot-mark">✳</span><p><strong>The app and CLI share one core.</strong> Build from the desktop or automate the same workflows with <code>odp</code>.</p><a href="docs/install.html">See how to get started <span>→</span></a></div>
+      </div>
+    </section>
+
+    <section class="visual-story section">
+      <div class="wrap story-grid">
+        <div class="story-image">
+          <img src="assets/modules-detail.webp" width="1440" height="1080" loading="lazy" alt="Editorial illustration of a laptop displaying a software module dependency graph">
+          <div class="story-image-label"><span>MODULE MAP</span><span>Dependencies · versions · state</span></div>
+        </div>
+        <div class="story-copy">
+          <div class="section-kicker"><span>03 / MODULE WORK</span></div>
+          <h2>Make the tangled bits<br><em>make sense.</em></h2>
+          <p>Odoo projects don’t live in a single checkout. Workbench maps what is installed, what depends on what, where addon paths overlap and whether the database still matches the code.</p>
+          <ul class="check-list">
+            <li><span>✓</span>Dependency graphs without importing manifests</li>
+            <li><span>✓</span>Per-database state and manifest-version checks</li>
+            <li><span>✓</span>Test upgrades in a disposable database</li>
+            <li><span>✓</span>Snapshot first; revert without losing the replaced DB</li>
+          </ul>
+          <a class="text-link" href="docs/install.html">Explore the full feature set <span>↗</span></a>
+        </div>
+      </div>
+    </section>
+
+    <section class="trust section section-soft" id="how-it-works">
+      <div class="wrap">
+        <div class="section-kicker"><span>04 / HOW IT WORKS</span><span class="kicker-line"></span><span>Local-first by design</span></div>
+        <div class="trust-head">
+          <h2>Your workstation.<br>Your boundaries.</h2>
+          <p>Workbench is a desktop tool, not a cloud console. The UI talks to a local Python core; a per-user agent starts Odoo as its own Linux user. Review the architecture and security notes before using it on a shared machine.</p>
+        </div>
+        <figure class="architecture-frame"><img src="assets/architecture.svg" width="1200" height="480" loading="lazy" alt="Local architecture diagram: desktop app, Python core, per-user agent, Odoo and PostgreSQL"><figcaption>One local sidecar. One run-as agent per Odoo version user. No remote control plane.</figcaption></figure>
+        <div class="safety-row">
+          <div><span class="safety-icon">01</span><strong>Reviewable plans</strong><p>Commands and data changes are visible before they run.</p></div>
+          <div><span class="safety-icon">02</span><strong>Least privilege</strong><p>Odoo runs as its own Linux user through a local agent.</p></div>
+          <div><span class="safety-icon">03</span><strong>Reversible work</strong><p>Snapshots and backups keep a way back when configured.</p></div>
+          <div><span class="safety-icon">04</span><strong>Read-only discovery</strong><p>Scanning the machine does not modify its installations.</p></div>
+        </div>
+        <div class="security-link"><span>Need the technical details?</span><a href="docs/security.html">Read the security model <span>→</span></a></div>
+      </div>
+    </section>
+
+    <section class="getting-started section" id="install">
+      <div class="wrap start-grid">
+        <div class="start-copy">
+          <div class="section-kicker"><span>05 / GET STARTED</span></div>
+          <h2>Start with the<br><em>machine you have.</em></h2>
+          <p>Designed for Ubuntu 24.04 or 26.04 on x86_64. The app works with the installations already on your workstation; you don’t need to migrate to a new layout first.</p>
+          <div class="platform-chips"><span>Ubuntu 24.04</span><span>Ubuntu 26.04</span><span>Odoo 15–20</span><span>Desktop + CLI</span></div>
+          <a class="text-link" href="docs/install.html">Read install and first-run docs <span>↗</span></a>
+        </div>
+        <div class="install-card">
+          <div class="install-card-head"><span class="install-number">01</span><div><strong>For the first release</strong><small>Install the signed package from this project’s Releases page when published.</small></div></div>
+          <div class="code-block"><span class="code-label">TERMINAL</span><code>sudo apt install ./odoo-workbench_&lt;version&gt;_amd64.deb</code><button type="button" class="copy-button" data-copy="sudo apt install ./odoo-workbench_&lt;version&gt;_amd64.deb" aria-label="Copy installation command">Copy</button></div>
+          <a class="release-link" href="#" data-github="releases/latest">Open Releases <span>↗</span></a>
+          <div class="install-divider"></div>
+          <div class="install-card-head"><span class="install-number">02</span><div><strong>Build from source</strong><small>For maintainers and contributors; native prerequisites are in CI.</small></div></div>
+          <div class="code-block"><span class="code-label">REPOSITORY ROOT</span><code>./dev.sh <span class="code-dim"># desktop app · hot reload</span></code><button type="button" class="copy-button" data-copy="./dev.sh" aria-label="Copy developer command">Copy</button></div>
+          <p class="install-caveat">The upstream APT signing key is intentionally not reused. This derivative’s own release signing and update channel must be configured by its maintainers.</p>
+        </div>
+      </div>
+    </section>
+
+    <section class="consultation section" id="consultation">
+      <div class="wrap consult-card">
+        <div class="consult-decoration" aria-hidden="true"><span>W</span><span>✳</span></div>
+        <div class="consult-copy">
+          <div class="eyebrow"><span class="eyebrow-dot"></span> EARLY ADOPTER OFFER</div>
+          <h2>Build a smoother<br><em>Odoo workflow.</em></h2>
+          <p>Not sure how Workbench fits your setup? Request a complimentary 20-minute consultation. Bring your Ubuntu and Odoo versions plus one workflow you’d like to improve—we’ll help you find a practical first step.</p>
+          <small>Never share credentials, customer data, database dumps or private configuration files.</small>
+        </div>
+        <div class="consult-action">
+          <div class="consult-note"><span class="note-star">✦</span><span><strong>Free · no pressure</strong><small>Early adopter onboarding</small></span></div>
+          <a class="button button-white" href="#" data-github="issues/new?template=free-consultation.yml">Request a free consultation <span aria-hidden="true">↗</span></a>
+          <span class="consult-foot">Open a “Free setup consultation” issue in the project repository.</span>
+        </div>
+      </div>
+    </section>
+
+    <section class="source-note section">
+      <div class="wrap source-row">
+        <div class="source-mark">↗</div>
+        <div><strong>Built on open source, with credit where it’s due.</strong><p>Odoo Workbench is an independent derivative of Odoo Dev Panel by SparkDrago05, licensed under Apache-2.0. We preserve upstream attribution and do not imply Odoo S.A. affiliation.</p></div>
+        <a href="https://github.com/SparkDrago05/odoo-dev-panel" rel="noreferrer">View upstream project <span>↗</span></a>
+      </div>
+    </section>
+  </main>
+
+  <footer class="site-footer">
+    <div class="wrap footer-main">
+      <a class="brand footer-brand" href="./"><img src="assets/workbench-mark.svg" width="34" height="34" alt=""><span>odoo<span class="brand-dot">.</span>workbench</span></a>
+      <p>A local-first development workspace<br>for the work around Odoo.</p>
+      <nav aria-label="Footer navigation"><a href="#features">Capabilities</a><a href="docs/install.html">Documentation</a><a href="NOTICE">Attribution</a><a href="https://github.com/SparkDrago05/odoo-dev-panel" rel="noreferrer">Upstream source</a></nav>
+      <a class="footer-top" href="#main">Back to top ↑</a>
+    </div>
+    <div class="wrap footer-bottom"><span>Odoo Workbench · Apache-2.0 derivative · source baseline {{version}}</span><span>Odoo is a trademark of Odoo S.A. · Independent community project</span></div>
+  </footer>
+  <script src="assets/site.js" defer></script>
+</body>
+</html>

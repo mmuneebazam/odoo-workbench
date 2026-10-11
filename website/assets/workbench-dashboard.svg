@@ -1,0 +1,133 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1440 920" role="img" aria-labelledby="title desc">
+  <title id="title">Odoo Workbench dashboard concept</title>
+  <desc id="desc">Illustrative desktop dashboard showing Odoo installations, running sessions, database health and module dependencies.</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1440" y2="920" gradientUnits="userSpaceOnUse"><stop stop-color="#171821"/><stop offset="1" stop-color="#101116"/></linearGradient>
+    <linearGradient id="violet" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#c3a6ff"/><stop offset="1" stop-color="#795ce7"/></linearGradient>
+    <linearGradient id="green" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#65d69a"/><stop offset="1" stop-color="#2aa96e"/></linearGradient>
+    <linearGradient id="glow" x1="210" y1="60" x2="1240" y2="820" gradientUnits="userSpaceOnUse"><stop stop-color="#8463ed" stop-opacity=".16"/><stop offset="1" stop-color="#181921" stop-opacity="0"/></linearGradient>
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="150%"><feDropShadow dx="0" dy="22" stdDeviation="28" flood-color="#000" flood-opacity=".46"/></filter>
+    <style>
+      .t{font-family:Inter,ui-sans-serif,system-ui,-apple-system,'Segoe UI',sans-serif;fill:#eef0f5}
+      .muted{fill:#9496a6}.faint{fill:#686b7a}.small{font-size:13px}.tiny{font-size:11px}.med{font-size:15px}.bold{font-weight:650}.mono{font-family:ui-monospace,'SFMono-Regular',Menlo,monospace}
+      .line{stroke:#2b2d38;stroke-width:1}
+    </style>
+  </defs>
+  <rect width="1440" height="920" rx="30" fill="#090a0e"/>
+  <g filter="url(#shadow)">
+    <rect x="16" y="16" width="1408" height="888" rx="22" fill="url(#bg)" stroke="#353744"/>
+    <rect x="16" y="16" width="1408" height="888" rx="22" fill="url(#glow)"/>
+  </g>
+  <!-- Window chrome -->
+  <path d="M38 16h1364a22 22 0 0 1 22 22v47H16V38a22 22 0 0 1 22-22Z" fill="#17181f"/>
+  <path d="M16 85h1408" class="line"/>
+  <circle cx="44" cy="50" r="6" fill="#f07270"/><circle cx="64" cy="50" r="6" fill="#e3b35a"/><circle cx="84" cy="50" r="6" fill="#55c78b"/>
+  <rect x="112" y="31" width="31" height="31" rx="10" fill="url(#violet)"/>
+  <rect x="120" y="39" width="7" height="7" rx="2" fill="#fff"/><rect x="129" y="39" width="7" height="7" rx="2" fill="#fff" opacity=".7"/><rect x="120" y="48" width="7" height="7" rx="2" fill="#fff" opacity=".7"/><rect x="129" y="48" width="7" height="7" rx="2" fill="#211a36"/>
+  <text x="153" y="52" class="t med bold">Odoo Workbench</text>
+  <rect x="952" y="31" width="298" height="36" rx="10" fill="#111218" stroke="#30323d"/>
+  <circle cx="973" cy="49" r="6" fill="none" stroke="#7d8090" stroke-width="1.7"/><path d="m977.5 53.5 5 5" stroke="#7d8090" stroke-width="1.7" stroke-linecap="round"/>
+  <text x="991" y="54" class="t small muted">Search or run a command…</text>
+  <rect x="1213" y="37" width="26" height="23" rx="5" fill="#252631"/><text x="1219" y="53" class="t tiny muted mono">⌘K</text>
+  <circle cx="1287" cy="49" r="16" fill="#24242d"/><path d="M1287 41v16m-8-8h16" stroke="#c6c8d2" stroke-width="1.6" stroke-linecap="round"/>
+  <circle cx="1331" cy="49" r="16" fill="#24242d"/><circle cx="1331" cy="49" r="5" fill="none" stroke="#c6c8d2" stroke-width="1.6"/><path d="M1331 39v3m0 14v3m10-10h-3m-14 0h-3m17-7-2 2m-10 10-2 2m14 0-2-2m-10-10-2-2" stroke="#c6c8d2" stroke-width="1.2" stroke-linecap="round"/>
+  <!-- Sidebar -->
+  <path d="M16 85h244v819H38a22 22 0 0 1-22-22Z" fill="#17181f"/>
+  <path d="M260 85v819" class="line"/>
+  <g class="t small">
+    <text x="42" y="124" class="faint tiny bold" letter-spacing="1.3">WORKSPACE</text>
+    <rect x="31" y="141" width="212" height="40" rx="9" fill="#282632"/>
+    <rect x="31" y="151" width="3" height="20" rx="1.5" fill="#b096ff"/>
+    <path d="M51 154h15v13H51zM54 151v3m9-3v3m-9 16v-3m9 3v-3" fill="none" stroke="#cfbcff" stroke-width="1.5" stroke-linejoin="round"/>
+    <text x="78" y="166" class="t med bold">Overview</text>
+    <path d="M52 204v14m-5-7h10m-5-6-3 6 3 3 3-3-3-6Z" fill="none" stroke="#989aa9" stroke-width="1.5" stroke-linecap="round"/>
+    <text x="78" y="215" class="muted med">Sessions</text><rect x="207" y="198" width="22" height="20" rx="10" fill="#183929"/><text x="215" y="212" fill="#6bd69c" class="tiny bold">2</text>
+    <rect x="50" y="241" width="15" height="13" rx="2" fill="none" stroke="#989aa9" stroke-width="1.5"/><path d="M50 245h15m-11 4h6" stroke="#989aa9" stroke-width="1.3"/>
+    <text x="78" y="253" class="muted med">Databases</text>
+    <path d="M58 280c-6 0-9 5-9 10 0 6 4 11 9 11s9-5 9-11c0-5-3-10-9-10Zm-4 10 3 3 6-7" fill="none" stroke="#989aa9" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+    <text x="78" y="296" class="muted med">Doctor</text>
+    <rect x="51" y="317" width="16" height="13" rx="3" fill="none" stroke="#989aa9" stroke-width="1.5"/><path d="M55 317v-3h8v3m-6 4v5m4-5v5" stroke="#989aa9" stroke-width="1.3"/>
+    <text x="78" y="329" class="muted med">Docker</text>
+    <path d="M51 356h15m-15 6h15m-15 6h15" stroke="#989aa9" stroke-width="1.7" stroke-linecap="round"/>
+    <text x="78" y="369" class="muted med">Repositories</text>
+    <path d="M53 394v16m10-16v16M53 402h10" stroke="#989aa9" stroke-width="1.5" stroke-linecap="round"/><circle cx="53" cy="394" r="2.5" fill="#989aa9"/><circle cx="63" cy="394" r="2.5" fill="#989aa9"/><circle cx="63" cy="410" r="2.5" fill="#989aa9"/>
+    <text x="78" y="406" class="muted med">Tasks</text>
+    <path d="M50 440a8 8 0 1 1 15 4m-7-10v7l5 3" fill="none" stroke="#989aa9" stroke-width="1.5" stroke-linecap="round"/>
+    <text x="78" y="452" class="muted med">Performance</text>
+    <text x="42" y="499" class="faint tiny bold" letter-spacing="1.3">INSTALLATIONS</text>
+    <path d="m43 522 5 5 5-5" fill="none" stroke="#a7a9b7" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+    <rect x="61" y="514" width="28" height="20" rx="6" fill="#282a34"/><text x="68" y="528" class="muted tiny bold">19</text><text x="99" y="529" class="t small bold">northstar</text><circle cx="220" cy="524" r="4" fill="#54ca8c"/>
+    <circle cx="55" cy="554" r="3" fill="#52c98a"/><text x="67" y="558" class="muted small">commerce</text>
+    <circle cx="55" cy="580" r="3" fill="#686b7a"/><text x="67" y="584" class="muted small">staging</text>
+    <path d="m43 609 4 4-4 4" fill="none" stroke="#a7a9b7" stroke-width="1.4"/><rect x="61" y="604" width="28" height="20" rx="6" fill="#282a34"/><text x="68" y="618" class="muted tiny bold">18</text><text x="99" y="619" class="muted small">legacy</text><circle cx="220" cy="614" r="4" fill="#e3b35a"/>
+  </g>
+  <path d="M16 862h244" class="line"/><circle cx="52" cy="884" r="5" fill="#b095ff"/><text x="68" y="889" class="t small">Settings</text>
+  <!-- Main canvas -->
+  <text x="300" y="129" class="t" font-size="28" font-weight="680" letter-spacing="-.6">Your Odoo workspace</text>
+  <text x="300" y="158" class="muted med">A clear view of what is running, what needs attention, and what is safe to change.</text>
+  <rect x="1117" y="112" width="137" height="40" rx="10" fill="#24252e" stroke="#373945"/>
+  <path d="M1135 131h12m-6-6v12" stroke="#c5c6d0" stroke-width="1.6" stroke-linecap="round"/><text x="1157" y="136" class="t small bold">Run Odoo</text>
+  <rect x="1265" y="112" width="129" height="40" rx="10" fill="url(#violet)"/><text x="1287" y="136" fill="#171322" class="t small bold">+ New install</text>
+  <!-- Summary cards -->
+  <g>
+    <rect x="300" y="190" width="345" height="135" rx="15" fill="#1b1c24" stroke="#30323d"/>
+    <circle cx="330" cy="222" r="15" fill="#1e3a2d"/><path d="M326 222h8m-4-4v8" stroke="#69d99c" stroke-width="1.8" stroke-linecap="round"/>
+    <text x="358" y="226" class="muted small">RUNNING SESSIONS</text>
+    <text x="326" y="282" class="t" font-size="34" font-weight="680">02</text>
+    <text x="374" y="280" class="muted small">Odoo instances active</text>
+    <circle cx="333" cy="304" r="3.5" fill="#55cb8c"/><text x="344" y="308" class="muted tiny">commerce · 19.0</text>
+    <rect x="662" y="190" width="345" height="135" rx="15" fill="#1b1c24" stroke="#30323d"/>
+    <circle cx="692" cy="222" r="15" fill="#2c2540"/><path d="M692 214v8l5 3" fill="none" stroke="#c4adff" stroke-width="1.6" stroke-linecap="round"/>
+    <text x="720" y="226" class="muted small">HEALTH CHECK</text>
+    <text x="688" y="282" class="t" font-size="29" font-weight="680">All clear</text>
+    <rect x="688" y="298" width="70" height="18" rx="9" fill="#183829"/><text x="700" y="311" fill="#6bd79c" class="tiny bold">0 errors</text>
+    <text x="769" y="311" class="muted tiny">· Doctor ran just now</text>
+    <rect x="1024" y="190" width="370" height="135" rx="15" fill="#1b1c24" stroke="#30323d"/>
+    <circle cx="1054" cy="222" r="15" fill="#292336"/><path d="M1048 220h12m-12 4h12m-12 4h7" stroke="#c1aaff" stroke-width="1.5" stroke-linecap="round"/>
+    <text x="1082" y="226" class="muted small">DATA SAFETY</text>
+    <text x="1050" y="282" class="t" font-size="29" font-weight="680">12 snapshots</text>
+    <text x="1050" y="307" class="muted tiny">Newest: commerce · 8 minutes ago</text>
+    <circle cx="1364" cy="220" r="4" fill="#58cc8c"/>
+  </g>
+  <!-- Installation list -->
+  <rect x="300" y="350" width="690" height="270" rx="15" fill="#1b1c24" stroke="#30323d"/>
+  <text x="326" y="385" class="t med bold">Installations</text><text x="416" y="385" class="muted tiny">2 detected</text>
+  <text x="915" y="385" class="muted small">Scan again ↻</text>
+  <path d="M300 402h690" class="line"/>
+  <rect x="322" y="420" width="42" height="29" rx="8" fill="#292a35"/><text x="331" y="439" class="muted small mono bold">19</text>
+  <text x="380" y="433" class="t med bold">northstar</text><text x="380" y="453" class="muted tiny mono">/opt/odoo19 · runs as odoo19</text>
+  <rect x="802" y="426" width="75" height="22" rx="11" fill="#183829"/><circle cx="815" cy="437" r="3" fill="#58ce8e"/><text x="824" y="441" fill="#74dba2" class="tiny bold">healthy</text>
+  <text x="903" y="441" class="muted tiny">2 configs · 4 db</text>
+  <path d="M322 472h646" class="line"/>
+  <rect x="322" y="489" width="42" height="29" rx="8" fill="#292a35"/><text x="331" y="508" class="muted small mono bold">18</text>
+  <text x="380" y="502" class="t med bold">legacy</text><text x="380" y="522" class="muted tiny mono">/srv/odoo18 · runs as odoo18</text>
+  <rect x="802" y="495" width="75" height="22" rx="11" fill="#40331e"/><circle cx="815" cy="506" r="3" fill="#e4b85d"/><text x="824" y="510" fill="#ecc777" class="tiny bold">1 warning</text>
+  <text x="903" y="510" class="muted tiny">1 config · 2 db</text>
+  <rect x="322" y="554" width="646" height="43" rx="10" fill="#22232d"/>
+  <path d="M342 570h13m-13 7h13m-13 7h7" stroke="#9c9faf" stroke-width="1.5" stroke-linecap="round"/><text x="369" y="580" class="muted small">Open Doctor report</text><text x="935" y="581" class="muted small">→</text>
+  <!-- Performance chart -->
+  <rect x="1010" y="350" width="384" height="270" rx="15" fill="#1b1c24" stroke="#30323d"/>
+  <text x="1036" y="385" class="t med bold">Performance</text><text x="1036" y="406" class="muted tiny">northstar · last 60 minutes</text>
+  <rect x="1300" y="369" width="68" height="24" rx="7" fill="#272833"/><text x="1314" y="385" class="muted tiny">CPU · 18%</text>
+  <path d="M1036 469h332M1036 505h332M1036 541h332M1036 577h332" stroke="#2c2e38" stroke-width="1" stroke-dasharray="4 7"/>
+  <path d="M1038 528 1070 516 1100 524 1130 501 1160 509 1191 482 1220 494 1250 468 1280 484 1310 456 1340 469 1368 446" fill="none" stroke="#a990ff" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M1038 528 1070 516 1100 524 1130 501 1160 509 1191 482 1220 494 1250 468 1280 484 1310 456 1340 469 1368 446v132h-330Z" fill="#9678ff" opacity=".08"/>
+  <circle cx="1368" cy="446" r="5" fill="#c7b4ff" stroke="#392e59" stroke-width="4"/>
+  <text x="1036" y="600" class="faint tiny">10:00</text><text x="1182" y="600" class="faint tiny">10:30</text><text x="1333" y="600" class="faint tiny">11:00</text>
+  <!-- Module graph / compact card -->
+  <rect x="300" y="642" width="690" height="224" rx="15" fill="#1b1c24" stroke="#30323d"/>
+  <text x="326" y="677" class="t med bold">Module dependency map</text><text x="326" y="697" class="muted tiny">sale_management · Odoo 19</text>
+  <rect x="330" y="728" width="133" height="53" rx="10" fill="#262430" stroke="#987cf4"/><text x="348" y="750" class="t small bold">sale</text><text x="348" y="768" class="muted tiny">installed · 19.0</text>
+  <rect x="535" y="718" width="145" height="53" rx="10" fill="#242731" stroke="#3f4250"/><text x="553" y="741" class="t small bold">sale_stock</text><text x="553" y="758" class="muted tiny">dependency</text>
+  <rect x="535" y="789" width="145" height="53" rx="10" fill="#242731" stroke="#3f4250"/><text x="553" y="812" class="t small bold">stock</text><text x="553" y="829" class="muted tiny">installed · 19.0</text>
+  <rect x="765" y="753" width="171" height="53" rx="10" fill="#242731" stroke="#3f4250"/><text x="783" y="776" class="t small bold">sale_management</text><text x="783" y="793" class="muted tiny">2 dependencies</text>
+  <path d="M463 754h53c8 0 8-9 18-9m-18 9c10 0 10 61 18 61m145-96h44c8 0 8 59 18 59m-62 3h62" fill="none" stroke="#8d79ce" stroke-width="1.7" marker-end="url(#arr)"/>
+  <defs><marker id="arr" markerWidth="8" markerHeight="8" refX="6" refY="4" orient="auto"><path d="M0 0 8 4 0 8Z" fill="#8d79ce"/></marker></defs>
+  <rect x="1010" y="642" width="384" height="224" rx="15" fill="#1b1c24" stroke="#30323d"/>
+  <text x="1036" y="677" class="t med bold">Recent activity</text><text x="1036" y="697" class="muted tiny">Every change begins with a reviewed plan.</text>
+  <circle cx="1046" cy="735" r="10" fill="#1e3a2d"/><path d="m1042 735 3 3 5-6" fill="none" stroke="#65d394" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/><text x="1068" y="733" class="t small bold">Snapshot created</text><text x="1068" y="751" class="muted tiny">commerce · before module upgrade</text><text x="1365" y="741" class="faint tiny">08m</text>
+  <path d="M1036 771h332" class="line"/><circle cx="1046" cy="797" r="10" fill="#29243a"/><path d="M1042 797h8m-4-4v8" stroke="#b69cff" stroke-width="1.4" stroke-linecap="round"/><text x="1068" y="795" class="t small bold">Module tests passed</text><text x="1068" y="813" class="muted tiny">sale_management · throwaway DB</text><text x="1365" y="803" class="faint tiny">24m</text>
+  <path d="M1036 833h332" class="line"/><circle cx="1046" cy="851" r="10" fill="#3b3020"/><path d="m1046 846 4 7h-8Z" fill="#e3b45e"/><text x="1068" y="855" class="t small bold">Python environment checked</text>
+  <!-- Status bar -->
+  <path d="M16 882h1408" class="line"/><circle cx="35" cy="893" r="3.5" fill="#54c987"/><text x="48" y="897" class="muted tiny">Workbench ready</text><text x="1350" y="897" class="muted tiny">Ctrl K · command palette</text>
+</svg>

@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" role="img" aria-labelledby="title">
+  <title id="title">Odoo Workbench mark</title>
+  <defs>
+    <linearGradient id="g" x1="5" y1="4" x2="44" y2="46" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#b79bff"/><stop offset=".55" stop-color="#8065ed"/><stop offset="1" stop-color="#5941bd"/>
+    </linearGradient>
+    <linearGradient id="shine" x1="8" y1="7" x2="39" y2="42" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#fff" stop-opacity=".22"/><stop offset="1" stop-color="#fff" stop-opacity="0"/>
+    </linearGradient>
+  </defs>
+  <rect x="1" y="1" width="46" height="46" rx="15" fill="#17151f"/>
+  <rect x="2" y="2" width="44" height="44" rx="14" fill="url(#g)"/>
+  <rect x="2" y="2" width="44" height="44" rx="14" fill="url(#shine)"/>
+  <rect x="10" y="10" width="12" height="12" rx="3.5" fill="#fff"/>
+  <rect x="26" y="10" width="12" height="12" rx="3.5" fill="#fff" opacity=".70"/>
+  <rect x="10" y="26" width="12" height="12" rx="3.5" fill="#fff" opacity=".70"/>
+  <path d="M29 26h6a3 3 0 0 1 3 3v6a3 3 0 0 1-3 3h-6a3 3 0 0 1-3-3v-6a3 3 0 0 1 3-3Z" fill="#17151f" opacity=".88"/>
+  <path d="M29.5 31.1 32 33.6l4.2-4.6" fill="none" stroke="#d3c3ff" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"/>
+</svg>
